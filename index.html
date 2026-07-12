@@ -1,12 +1,355 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AXIEZ-LINKs エレベーターシミュレーター</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>AXIEZ-LINKs EXPERIENCE — 意匠3Dシミュレーター（非公式）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@300;400;500;700&family=Inter:wght@200;400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#08090b; --panel:rgba(13,15,18,.80); --panel-solid:#0d0f12;
+  --ink:#f4f5f6; --sub:#8b919a; --red:#e60012; --hair:rgba(255,255,255,.14);
+  --hair2:rgba(255,255,255,.07);
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--void);color:var(--ink);
+  font-family:'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN',sans-serif;}
+#stage{position:fixed;inset:0;}
+canvas{display:block;}
+
+/* ---------- 共通タイポ ---------- */
+.eyebrow{font-family:Inter,sans-serif;font-size:9.5px;letter-spacing:.38em;color:var(--sub);
+  text-transform:uppercase;display:flex;gap:10px;align-items:center;}
+.eyebrow::after{content:"";flex:1;height:1px;background:var(--hair2);}
+.eyebrow b{color:var(--ink);font-weight:400;letter-spacing:.2em;}
+
+/* ---------- ヘッダー ---------- */
+#hud-top{position:fixed;top:0;left:0;right:0;display:flex;justify-content:space-between;
+  align-items:center;padding:16px 22px;z-index:30;pointer-events:none;}
+#hud-top .brand{display:flex;align-items:baseline;gap:12px;}
+#hud-top .brand .mark{width:9px;height:9px;background:var(--red);transform:rotate(45deg);}
+#hud-top .brand h1{font-family:Inter,sans-serif;font-weight:200;font-size:15px;letter-spacing:.32em;margin:0;}
+#hud-top .brand small{font-size:10px;color:var(--sub);letter-spacing:.14em;}
+#hud-top .note{font-size:9.5px;color:#565b63;letter-spacing:.12em;}
+
+/* ---------- フロアHUD ---------- */
+#floorHud{position:fixed;left:26px;bottom:28px;z-index:30;pointer-events:none;
+  display:flex;align-items:flex-end;gap:14px;}
+#floorHud .num{font-family:Inter,sans-serif;font-weight:200;font-size:88px;line-height:.8;
+  letter-spacing:-.02em;color:var(--ink);transition:text-shadow .4s;}
+#floorHud.moving .num{text-shadow:0 0 40px rgba(230,0,18,.45);}
+#floorHud .meta{display:flex;flex-direction:column;gap:6px;padding-bottom:6px;}
+#floorHud .meta .dir{font-family:Inter,sans-serif;font-size:13px;color:var(--red);height:15px;letter-spacing:.3em;}
+#floorHud .meta .lbl{font-size:9px;letter-spacing:.4em;color:var(--sub);}
+#floorHud .meta .dept{font-size:11px;letter-spacing:.14em;color:var(--ink);min-height:14px;}
+
+/* ---------- 右パネル ---------- */
+#panel{position:fixed;top:64px;right:18px;bottom:18px;width:354px;z-index:40;
+  background:var(--panel);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  border:1px solid var(--hair);display:flex;flex-direction:column;overflow:hidden;}
+#panel .ph{padding:16px 18px 12px;border-bottom:1px solid var(--hair2);}
+#panel .ph .eyebrow{margin-bottom:6px;}
+#panel .ph h2{margin:0;font-size:14px;font-weight:500;letter-spacing:.18em;}
+#panel .scroll{flex:1;overflow-y:auto;overscroll-behavior:contain;}
+#panel .scroll::-webkit-scrollbar{width:3px;}
+#panel .scroll::-webkit-scrollbar-thumb{background:#2a2e34;}
+.sec{border-bottom:1px solid var(--hair2);}
+.sec>button.head{all:unset;display:flex;width:100%;justify-content:space-between;align-items:center;
+  padding:14px 18px;cursor:pointer;}
+.sec>button.head .t{display:flex;flex-direction:column;gap:2px;}
+.sec>button.head .en{font-family:Inter,sans-serif;font-size:8.5px;letter-spacing:.34em;color:var(--sub);text-transform:uppercase;}
+.sec>button.head .jp{font-size:13px;letter-spacing:.14em;}
+.sec>button.head .chev{width:8px;height:8px;border-right:1px solid var(--sub);border-bottom:1px solid var(--sub);
+  transform:rotate(45deg);transition:transform .35s;}
+.sec.open>button.head .chev{transform:rotate(225deg);}
+.sec .body{height:0;overflow:hidden;}
+.sec .inner{padding:2px 18px 18px;}
+
+/* スウォッチ */
+.swatches{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;}
+.sw{cursor:pointer;display:flex;flex-direction:column;gap:6px;}
+.sw .c{aspect-ratio:1;border:1px solid var(--hair);position:relative;transition:.25s;}
+.sw .c::after{content:"";position:absolute;inset:-4px;border:1px solid transparent;transition:.25s;}
+.sw.active .c::after{border-color:var(--red);}
+.sw .n{font-size:8.5px;color:var(--sub);letter-spacing:.04em;line-height:1.3;}
+.sw.active .n{color:var(--ink);}
+.swhead{font-size:8.5px;letter-spacing:.3em;color:var(--sub);margin:12px 0 7px;}
+.swhead:first-child{margin-top:2px;}
+.swgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;}
+.grid5{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;}
+.ctl.sm{padding:8px 2px;font-size:10px;letter-spacing:.06em;}
+.toggles.wrap{flex-wrap:wrap;}
+.toggles.wrap .tgl{flex:1 1 30%;}
+
+/* スタイルカード */
+.styles{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
+.stylecard{border:1px solid var(--hair);padding:12px;cursor:pointer;transition:.25s;position:relative;}
+.stylecard h4{margin:0 0 3px;font-family:Inter,sans-serif;font-weight:400;font-size:11px;letter-spacing:.22em;}
+.stylecard p{margin:0;font-size:9px;color:var(--sub);line-height:1.5;}
+.stylecard .bar{position:absolute;left:0;top:0;bottom:0;width:2px;background:transparent;transition:.25s;}
+.stylecard.active{border-color:rgba(255,255,255,.3);}
+.stylecard.active .bar{background:var(--red);}
+
+/* リスト選択 */
+.optlist{display:flex;flex-direction:column;gap:7px;}
+.opt{border:1px solid var(--hair);padding:10px 12px;font-size:11px;letter-spacing:.06em;
+  cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:.2s;color:var(--sub);}
+.opt.active{color:var(--ink);border-color:rgba(255,255,255,.32);}
+.opt .dot{width:5px;height:5px;border-radius:50%;background:transparent;}
+.opt.active .dot{background:var(--red);}
+.opt small{font-size:8.5px;color:#5a5f67;}
+
+/* トグル */
+.toggles{display:flex;gap:8px;}
+.tgl{flex:1;border:1px solid var(--hair);padding:9px;text-align:center;font-size:11px;
+  letter-spacing:.12em;cursor:pointer;color:var(--sub);transition:.2s;}
+.tgl.active{color:var(--ink);border-color:rgba(255,255,255,.32);box-shadow:inset 0 -2px 0 var(--red);}
+
+/* 体験 操作 */
+.floorbtns{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;}
+.fb{all:unset;border:1px solid var(--hair);aspect-ratio:1.5;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  font-family:Inter,sans-serif;font-size:14px;cursor:pointer;color:var(--ink);transition:.2s;}
+.fb small{font-size:7px;color:var(--sub);letter-spacing:.05em;margin-top:2px;font-family:'Zen Kaku Gothic New';}
+.fb:hover{border-color:rgba(255,255,255,.4);}
+.fb.now{border-color:var(--red);color:var(--red);}
+.rowbtns{display:flex;gap:8px;}
+.ctl{all:unset;flex:1;border:1px solid var(--hair);padding:10px;text-align:center;font-size:11px;
+  letter-spacing:.18em;cursor:pointer;transition:.2s;}
+.ctl:hover{border-color:rgba(255,255,255,.4);}
+.ann{margin-top:12px;display:flex;flex-direction:column;gap:6px;}
+.ann .a{font-size:10.5px;color:var(--sub);border-left:1px solid var(--hair);padding:5px 10px;cursor:pointer;transition:.2s;}
+.ann .a:hover{color:var(--ink);border-left-color:var(--red);}
+
+/* 仕様 */
+.spec{font-size:10.5px;display:flex;flex-direction:column;}
+.spec .r{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--hair2);}
+.spec .k{color:var(--sub);letter-spacing:.08em;}
+.spec .v{text-align:right;max-width:62%;}
+
+/* ---------- イントロ ---------- */
+#intro{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
+  background:var(--void);}
+#intro .inner{width:min(680px,90vw);}
+#intro .eyebrow{margin-bottom:14px;}
+#intro h2.title{font-family:Inter,sans-serif;font-weight:200;font-size:clamp(28px,5vw,46px);
+  letter-spacing:.18em;margin:0 0 6px;}
+#intro p.lead{color:var(--sub);font-size:12px;letter-spacing:.1em;margin:0 0 38px;line-height:1.9;}
+#intro .stepLbl{font-size:10px;letter-spacing:.3em;color:var(--sub);margin:0 0 12px;}
+.typecards{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:30px;}
+.tc{border:1px solid var(--hair);padding:20px;cursor:pointer;transition:.25s;position:relative;overflow:hidden;}
+.tc .en{font-family:Inter,sans-serif;font-size:9px;letter-spacing:.32em;color:var(--sub);}
+.tc h3{margin:6px 0 4px;font-size:17px;font-weight:500;letter-spacing:.2em;}
+.tc p{margin:0;font-size:10px;color:var(--sub);letter-spacing:.06em;}
+.tc .line{position:absolute;left:0;bottom:0;height:2px;width:0;background:var(--red);transition:.4s;}
+.tc.active{border-color:rgba(255,255,255,.35);}
+.tc.active .line{width:100%;}
+.caps{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:34px;}
+.cap{all:unset;border:1px solid var(--hair);min-width:64px;padding:12px 0;text-align:center;cursor:pointer;
+  font-family:Inter,sans-serif;font-size:15px;transition:.2s;color:var(--sub);}
+.cap span{font-family:'Zen Kaku Gothic New';font-size:9px;display:block;letter-spacing:.2em;margin-top:3px;}
+.cap.active{color:var(--ink);border-color:var(--red);}
+#startBtn{all:unset;display:inline-flex;align-items:center;gap:16px;cursor:pointer;
+  border:1px solid var(--ink);padding:15px 34px;letter-spacing:.34em;font-size:12px;transition:.3s;}
+#startBtn:hover{background:var(--ink);color:var(--void);}
+#startBtn .arr{font-family:Inter;letter-spacing:0;}
+#intro .foot{margin-top:40px;font-size:9px;color:#4c5158;letter-spacing:.1em;line-height:1.8;}
+
+/* ドアゲート（シグネチャー演出） */
+.gate{position:fixed;top:0;bottom:0;width:51vw;z-index:55;
+  background:linear-gradient(105deg,#101216 0%,#1a1d22 38%,#0c0e11 62%,#15181d 100%);
+  display:none;}
+.gate::before{content:"";position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.18);}
+#gateL{left:0;} #gateL::before{right:0;}
+#gateR{right:0;} #gateR::before{left:0;}
+.gate .seam{position:absolute;top:0;bottom:0;width:2px;background:var(--red);opacity:.85;}
+#gateL .seam{right:0;} #gateR .seam{left:0;}
+
+/* ヒント・トースト */
+#hint{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:30;
+  font-size:10px;letter-spacing:.26em;color:var(--sub);pointer-events:none;opacity:0;}
+#toast{position:fixed;left:50%;top:70px;transform:translateX(-50%);z-index:50;background:var(--panel-solid);
+  border:1px solid var(--hair);padding:10px 22px;font-size:11px;letter-spacing:.14em;opacity:0;pointer-events:none;}
+
+/* モバイル */
+#panelTab{display:none;}
+@media(max-width:880px){
+  #panel{top:auto;left:0;right:0;bottom:0;width:auto;height:54vh;border-left:none;border-right:none;
+    transform:translateY(calc(100% - 46px));transition:transform .45s cubic-bezier(.22,1,.36,1);}
+  #panel.openSheet{transform:translateY(0);}
+  #panelTab{display:flex;justify-content:center;align-items:center;gap:10px;padding:14px;cursor:pointer;
+    font-size:10px;letter-spacing:.3em;color:var(--sub);border-bottom:1px solid var(--hair2);}
+  #floorHud .num{font-size:56px;}
+  #hud-top .note{display:none;}
+}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<header id="hud-top">
+  <div class="brand">
+    <div class="mark"></div>
+    <h1>AXIEZ-LINKs <span style="color:var(--sub)">EXPERIENCE</span></h1>
+    <small>意匠3Dシミュレーター（非公式）</small>
+  </div>
+  <div class="note">DRAG : 視点移動 ／ SCROLL : ズーム ／ かご内のボタンもクリックできます</div>
+</header>
+
+<div id="floorHud" style="opacity:0">
+  <div class="num" id="hudNum">1</div>
+  <div class="meta">
+    <div class="dir" id="hudDir"></div>
+    <div class="dept" id="hudDept"></div>
+    <div class="lbl">FLOOR ─ 現在階</div>
+  </div>
+</div>
+
+<div id="hint">ドラッグして、かご内を見回せます</div>
+<div id="toast"></div>
+
+<!-- ============ 右パネル ============ -->
+<aside id="panel" style="opacity:0">
+  <div id="panelTab">CUSTOMIZE ─ タップして開く</div>
+  <div class="ph">
+    <div class="eyebrow">CONFIGURATOR <b>意匠カスタマイズ</b></div>
+    <h2 id="capLabel">乗用 P ・ 9名</h2>
+  </div>
+  <div class="scroll" id="secWrap">
+
+    <div class="sec open" data-sec>
+      <button class="head"><span class="t"><span class="en">Experience</span><span class="jp">乗車体験</span></span><span class="chev"></span></button>
+      <div class="body"><div class="inner">
+        <div class="floorbtns" id="floorBtns"></div>
+        <div class="rowbtns">
+          <button class="ctl" id="btnDoor">ドア開閉</button>
+          <button class="ctl" id="btnView">視点リセット</button>
+        </div>
+        <div class="toggles" style="margin-top:12px">
+          <div class="tgl active" data-lang="ja">日本語音声</div>
+          <div class="tgl" data-lang="en">English</div>
+          <div class="tgl" data-lang="off">OFF</div>
+        </div>
+        <div class="ann" id="annList"></div>
+      </div></div>
+    </div>
+
+    <div class="sec" data-sec>
+      <button class="head"><span class="t"><span class="en">View</span><span class="jp">視点・アングル</span></span><span class="chev"></span></button>
+      <div class="body"><div class="inner">
+        <div class="toggles" style="margin-bottom:12px">
+          <div class="tgl active" data-view="cab">かご内視点</div>
+          <div class="tgl" data-view="doll">俯瞰ビュー</div>
+        </div>
+        <div class="eyebrow" style="margin-bottom:8px">PRESET ANGLE <b>プリセットアングル</b></div>
+        <div class="grid5">
+          <button class="ctl sm" data-ang="front">正面</button>
+          <button class="ctl sm" data-ang="back">背面</button>
+          <button class="ctl sm" data-ang="panel">操作盤</button>
+          <button class="ctl sm" data-ang="ceil">天井</button>
+          <button class="ctl sm" data-ang="floor">床</button>
+        </div>
+      </div></div>
+    </div>
+
+    <div class="sec" data-sec>
+      <button class="head"><span class="t"><span class="en">Ride Simulation</span><span class="jp">乗車シミュレーション</span></span><span class="chev"></span></button>
+      <div class="body"><div class="inner">
+        <div class="toggles wrap">
+          <div class="tgl active" data-ppl="none">なし</div>
+          <div class="tgl" data-ppl="few">少人数</div>
+          <div class="tgl" data-ppl="half">定員半分</div>
+          <div class="tgl" data-ppl="seven">定員7割</div>
+          <div class="tgl" data-ppl="full">定員</div>
+          <div class="tgl" data-ppl="wc">車いす</div>
+        </div>
+        <p style="font-size:9px;color:#4c5158;margin:10px 0 0;line-height:1.7">人物モデルを配置して、かご内の広さ・混雑感を確認できます。</p>
+      </div></div>
+    </div>
+
+    <div class="sec" data-sec>
+      <button class="head"><span class="t"><span class="en">Style</span><span class="jp">スタイルプリセット</span></span><span class="chev"></span></button>
+      <div class="body"><div class="inner"><div class="styles" id="styleCards"></div></div></div>
+    </div>
+
+    <div class="sec" data-sec>
+      <button class="head"><span class="t"><span class="en">Wall</span><span class="jp">壁・側板</span></span><span class="chev"></span></button>
+      <div class="body"><div class="inner"><div id="wallSw"></div></div></div>
+    </div>
+
+    <div class="sec" data-sec>
+      <button class="head"><span class="t"><span class="en">Floor</span><span class="jp">床</span></span><span class="chev"></span></button>
+      <div class="body"><div class="inner"><div id="floorSw"></div></div></div>
+    </div>
+
+    <div class="sec" data-sec>
+      <button class="head"><span class="t"><span class="en">Door / Frame</span><span class="jp">ドア・三方枠・幅木</span></span><span class="chev"></span></button>
+      <div class="body"><div class="inner">
+        <div class="eyebrow" style="margin-bottom:8px">DOOR <b>かごドア</b></div>
+        <div id="doorSw" style="margin-bottom:14px"></div>
+        <div class="eyebrow" style="margin-bottom:8px">TRANSOM / JAMB <b>三方枠・トランサム</b></div>
+        <div id="frameSw" style="margin-bottom:14px"></div>
+        <div class="eyebrow" style="margin-bottom:8px">KICK PLATE <b>幅木</b></div>
+        <div id="kickSw"></div>
+      </div></div>
+    </div>
+
+    <div class="sec" data-sec>
+      <button class="head"><span class="t"><span class="en">Ceiling / Light</span><span class="jp">天井・照明</span></span><span class="chev"></span></button>
+      <div class="body"><div class="inner"><div class="optlist" id="ceilList"></div></div></div>
+    </div>
+
+    <div class="sec" data-sec>
+      <button class="head"><span class="t"><span class="en">Operating Panel</span><span class="jp">操作盤・ボタン</span></span><span class="chev"></span></button>
+      <div class="body"><div class="inner"><div class="optlist" id="panelList"></div></div></div>
+    </div>
+
+    <div class="sec" data-sec>
+      <button class="head"><span class="t"><span class="en">Options</span><span class="jp">オプション</span></span><span class="chev"></span></button>
+      <div class="body"><div class="inner">
+        <div class="eyebrow" style="margin-bottom:8px">HANDRAIL <b>手すり</b></div>
+        <div class="toggles" style="margin-bottom:14px"><div class="tgl active" data-hr="1">あり（三方）</div><div class="tgl" data-hr="0">なし</div></div>
+        <div class="eyebrow" style="margin-bottom:8px">MIRROR <b>鏡</b></div>
+        <div class="toggles"><div class="tgl active" data-mr="1">あり</div><div class="tgl" data-mr="0">なし</div></div>
+      </div></div>
+    </div>
+
+    <div class="sec" data-sec>
+      <button class="head"><span class="t"><span class="en">Specification</span><span class="jp">仕様サマリー</span></span><span class="chev"></span></button>
+      <div class="body"><div class="inner">
+        <div class="spec" id="specList"></div>
+        <div class="rowbtns" style="margin-top:14px"><button class="ctl" id="btnShare">共有URLをコピー</button></div>
+        <p style="font-size:9px;color:#4c5158;line-height:1.8;margin:14px 0 0">
+          色名・品番（LA04 / CP132 / FQ630 等）は三菱電機ビルソリューションズのカタログを参考にした近似表現です。
+          音声はブラウザ合成音声によるデモであり、実機アナウンスの録音ではありません。本ツールは非公式です。
+        </p>
+      </div></div>
+    </div>
+
+  </div>
+</aside>
+
+<!-- ============ イントロ ============ -->
+<div class="gate" id="gateL"><div class="seam"></div></div>
+<div class="gate" id="gateR"><div class="seam"></div></div>
+
+<div id="intro">
+  <div class="inner">
+    <div class="eyebrow">MITSUBISHI-INSPIRED ELEVATOR EXPERIENCE <b>非公式</b></div>
+    <h2 class="title">AXIEZ-LINKs</h2>
+    <p class="lead">実機に乗車しなくても、かご内意匠と乗り心地を3D空間で体験できます。<br>タイプと定員を選択して、扉の向こうへ。</p>
+    <p class="stepLbl">01 ── タイプを選択</p>
+    <div class="typecards">
+      <div class="tc active" data-type="P"><span class="en">PASSENGER</span><h3>P 乗用</h3><p>オフィス・商業施設向け</p><div class="line"></div></div>
+      <div class="tc" data-type="R"><span class="en">RESIDENTIAL</span><h3>R 住宅用</h3><p>マンション・住宅向け</p><div class="line"></div></div>
+    </div>
+    <p class="stepLbl">02 ── 定員を選択</p>
+    <div class="caps" id="capChips"></div>
+    <button id="startBtn">体験を開始 <span class="arr">→</span></button>
+    <p class="foot">本コンテンツは三菱電機ビルソリューションズ「AXIEZ-LINKs」の公開カタログ情報を参考にした意匠確認用の非公式デモです。公式ロゴ・実機音声・写真素材は使用していません。</p>
+  </div>
+</div>
+
+<script type="module" src="/src/main.js"></script>
+</body>
 </html>

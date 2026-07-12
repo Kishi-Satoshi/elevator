@@ -1,114 +1,73 @@
-# AXIEZ-LINKs エレベーターシミュレーター
+# AXIEZ-LINKs EXPERIENCE — 意匠3Dシミュレーター（非公式）
 
 [![CI](https://github.com/Kishi-Satoshi/elevator/actions/workflows/ci.yml/badge.svg)](https://github.com/Kishi-Satoshi/elevator/actions/workflows/ci.yml)
 [![Deploy](https://github.com/Kishi-Satoshi/elevator/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/Kishi-Satoshi/elevator/actions/workflows/deploy-pages.yml)
 
 🔗 **ライブデモ**: https://kishi-satoshi.github.io/elevator/
 
-三菱電機ビルソリューションズの「AXIEZ-LINKs」を模した、3Dエレベーターシミュレーターゲームです。
-React Three Fiber によるリアルなかご内ビジュアルで、1〜20階のボタン操作・チャイム・日英音声アナウンスを再現しています。
+三菱電機ビルソリューションズ「AXIEZ-LINKs」の公開カタログ情報を参考にした、
+かご内意匠と乗り心地を3D空間で体験できる非公式コンフィギュレーターです。
+公式ロゴ・実機音声・写真素材は使用していません。
+
+## 体験の流れ
+
+1. **イントロ**: タイプ（P乗用 / R住宅用）と定員（6〜15名）を選択
+2. **扉が開く**: ゲート演出とともにかご内へ
+3. **カスタマイズ & 乗車**: 右パネルで意匠を変えながら、フロアボタンで実際に乗車
 
 ## 機能
 
-- **百貨店フロア体験**: 停止階ごとにドアの外のホールがまるごと変わる (1F化粧品 〜 20F屋上庭園の20フロア)。照明色・内装・什器・フロアガイドサインが売場ごとに演出され、百貨店にいるような体験ができる
-- **3Dかご内ビジュアル**: 4面壁 + 実像ミラー + 中央開きステンレスドア。カメラの向きに応じて視線を遮る壁が自動フェード (かご内からは透けない)
-- **高精度レンダリング**: MeshReflectorMaterial による床・鏡の実反射 / RoomEnvironment による PBR 環境光 / テーマ別の天井照明方式 (周縁間接照明・パネル・ダウンライト・全面発光)
-- **リアル走行シミュレーション**: ジャーク制限つきS字加減速プロファイル、速度連動の連続走行音、加減速に応じた慣性沈み込みとかご微振動、ホールランタン表示
-- **操作盤 (COP)**: 1〜20階ボタン (2列千鳥配列) / フロアガイド付きLCDインジケーター / 開・閉ボタン / 非常ベル
-- **サウンド**: Web Audio API によるベル質感チャイム合成 (上り単音 / 下り二連音)、ドア音、速度追従走行音
-- **音声アナウンス**: Web Speech API による百貨店式アナウンス「3階、婦人服・ハンドバッグ売場でございます」。実車アナウンス音源の解析値 (F0中央値245Hz・発話比率0.62) に基づき女声・ゆったりした話速にチューニング。日本語 / English 切替可能
-- **カスタマイズ** (localStorage 保存):
-  - かごテーマ: ラグジュアリー (Premium) / ナチュラル / コンフォート / モダン — 各テーマで照明方式・手すり材質・床反射が変化
-  - ボタンスタイル: クリスタル / ステンレスクリック / 大形
-  - ボタン発光色: アンバー / ブルー / ホワイト
-  - 操作盤仕上げ: ヘアライン / 振動仕上げ
-  - アナウンス言語: 日本語 / English
+### 乗車体験
+- 8フロアの行先ボタン（UIパネル / **かご内の3Dボタンも直接クリック可能**・刻印つき）
+- 走行シーケンス: 戸閉 → 加減速に追従する走行音・振動 → 階通過表示 → 到着チャイム（上り単音 / 下り二連音）→ 戸開
+- **百貨店フロア演出**: 到着階ごとに乗場の内装色・照明・売場名が変わる（1F化粧品 〜 8F屋上庭園）
+- 音声アナウンス（日本語 / English / OFF）: 「上へまいります」「5階、レストラン街売場でございます」等。
+  実車アナウンス音源の解析値（基本周波数中央値245Hz・ゆったりした話速）に基づく合成音声
 
-## 操作方法
+### 意匠カスタマイズ
+- **スタイルプリセット**: LUXURY / NATURAL / COMFORT / MODERN
+- **壁・側板**: 化粧鋼板 / プレミアムウォール / ステンレス（8色）
+- **床**: 樹脂タイル / プレミアムフロア（6色）
+- **ドア・三方枠・幅木**: 各色（ステンレス / ブラック / シャンパンゴールド / 木目 等）
+- **天井・照明**: フラット / ダウンライト白色・電球色 / コーニス間接
+- **操作盤**: ステンレスクリック / クリスタル / ブラック / タッチレス（10.1型縦LCD付き）
+- **オプション**: 手すり（三方）・鏡
+- 定員に応じた**かご寸法スケーリング**、人物モデル配置（少人数〜定員・車いす）で広さを確認
 
-| 操作 | 動作 |
-|---|---|
-| ドラッグ | かご内を見回す |
-| スクロール | ズームイン / アウト |
-| 階数ボタン | 行先階を登録 (複数登録可) |
-| 開 / 閉ボタン | 停止中のドア開閉 |
+### ビュー
+- かご内視点（ドラッグ見回し / ズーム）・俯瞰ビュー
+- プリセットアングル: 正面 / 背面 / 操作盤 / 天井 / 床
+
+### 共有・保存
+- 仕様サマリー表示、**共有URL**（構成をハッシュに埋め込み）、localStorage への自動保存
 
 ## 開発
 
 ```bash
 npm install
-npm run dev      # 開発サーバー起動 → http://localhost:5173
-npm run build    # 型チェック + プロダクションビルド
+npm run dev      # 開発サーバー → http://localhost:5173
+npm run build    # プロダクションビルド (dist/)
 npm run preview  # ビルド成果物のプレビュー
 ```
 
-## CI / 自動マージ
+## スタック
 
-`.github/workflows/` に2つの GitHub Actions を用意しています。
+Vanilla JS + three.js（Reflector / RoomEnvironment）+ GSAP + Web Audio API + Web Speech API / Vite 7
+
+```
+index.html     # マークアップ + スタイル（イントロ / HUD / カスタマイズパネル）
+src/main.js    # 3Dシーン・かご構築・乗車シーケンス・音響/音声・UI 一式
+```
+
+## CI / 自動マージ / 自動デプロイ
 
 | ワークフロー | 役割 |
 |---|---|
-| `ci.yml` | PR と `main` への push で `npm ci` → `npm run build`（型チェック + ビルド）を実行 |
-| `auto-merge.yml` | **`auto-merge` ラベル**が付いた PR を、CI 成功後に自動で **Squash マージ** |
-| `deploy-pages.yml` | `main` への push で GitHub Pages へ自動デプロイ |
+| `ci.yml` | PR と `main` への push で `npm ci` → `npm run build` を実行 |
+| `auto-merge.yml` | **`auto-merge` ラベル**付きPRを、CI成功後に自動で Squash マージ。`main` へのマージ後は Pages デプロイを自動起動 |
+| `deploy-pages.yml` | `main` への push / 手動 / auto-merge からの起動で GitHub Pages へデプロイ |
 
-### 使い方
-
-1. PR を作成する
-2. PR に `auto-merge` ラベルを付ける
-3. CI（ビルド）が緑になると自動的に Squash マージされる
-
-CI が失敗している間、または未実行の間はマージされません。ラベルを付けた時点で
-既に CI が緑なら即マージ、まだ実行中なら CI 完了時にマージされます。
-
-マージが `main` へのものだった場合、続けて Pages デプロイ（`deploy-pages.yml`）を
-自動起動します。これは `GITHUB_TOKEN` によるマージ push が他ワークフローを起動しない
-GitHub の仕様を回避するための明示的なディスパッチです。
-
-> **初回セットアップ**: `auto-merge` ラベルがリポジトリに無い場合は、一度だけ
-> GitHub の Issues/PR のラベル画面、または `gh label create auto-merge` で作成してください。
-> ワークフローの実行には Settings → Actions → General の "Workflow permissions" が
-> **Read and write** になっている必要があります。
-
-## GitHub Pages への公開
-
-`main` に push すると `deploy-pages.yml` が自動でビルド＆デプロイします。
-公開 URL は `https://<ユーザー名>.github.io/elevator/` です。
-
-### 初回セットアップ（一度だけ）
-
-1. GitHub の Settings → Pages を開く
-2. **Source** を **GitHub Actions** に設定する
-
-以降は `main` への push ごとに自動更新されます。手動実行したい場合は
-Actions タブの "Deploy to GitHub Pages" から **Run workflow** も可能です。
+PR に `auto-merge` ラベルを付けるだけで、CI → マージ → 公開まで全自動で流れます。
 
 > サブパス（`/elevator/`）配信のため、ビルド時に `VITE_BASE` を渡して Vite の
-> `base` を切り替えています。ローカルの `npm run dev` は `/` のままなので影響ありません。
-
-## スタック
-
-React 19 / TypeScript 5.9 / Vite 7 / Tailwind CSS 4 / three.js + @react-three/fiber + @react-three/drei
-
-## 構成
-
-```
-src/
-├── App.tsx                    # エントリー (シーン + カスタマイズパネル)
-├── components/
-│   ├── ElevatorScene.tsx      # 3Dシーン全体 (Canvas / 環境光 / 照明 / カメラ)
-│   ├── HallScene.tsx          # 百貨店ホール (フロアテーマ連動の売場演出)
-│   ├── CabinWalls.tsx         # かご室4面壁 + 実像ミラー + 手すり + 天井照明
-│   ├── CabinDoor.tsx          # 中央開きドア (スライドアニメーション)
-│   ├── OperationPanel.tsx     # 操作盤 (3D空間内にHTML埋め込み)
-│   ├── FloorButton.tsx        # 階数ボタン (クリスタル / ステンレス / 大形)
-│   ├── FloorIndicator.tsx     # フロアガイド付きLCDインジケーター
-│   └── CustomizePanel.tsx     # カスタマイズ設定UI
-├── hooks/
-│   ├── useElevator.ts         # 状態マシン + S字加減速走行プロファイル
-│   └── useElevatorAudio.ts    # チャイム合成 / 走行音 / 音声アナウンス
-└── lib/
-    ├── elevatorConfig.ts      # 型定義 / 定数 / アナウンス文 / 設定保存
-    ├── floorThemes.ts         # 百貨店20フロアのテーマ定義 (色/照明/什器)
-    └── stylePresets.ts        # かごテーマ4種 (照明方式/手すり/反射)
-```
+> `base` を切り替えています。ローカルの `npm run dev` は `/` のままです。
