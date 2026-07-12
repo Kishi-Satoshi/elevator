@@ -54,6 +54,10 @@ npm run preview  # ビルド成果物のプレビュー
 CI が失敗している間、または未実行の間はマージされません。ラベルを付けた時点で
 既に CI が緑なら即マージ、まだ実行中なら CI 完了時にマージされます。
 
+マージが `main` へのものだった場合、続けて Pages デプロイ（`deploy-pages.yml`）を
+自動起動します。これは `GITHUB_TOKEN` によるマージ push が他ワークフローを起動しない
+GitHub の仕様を回避するための明示的なディスパッチです。
+
 > **初回セットアップ**: `auto-merge` ラベルがリポジトリに無い場合は、一度だけ
 > GitHub の Issues/PR のラベル画面、または `gh label create auto-merge` で作成してください。
 > ワークフローの実行には Settings → Actions → General の "Workflow permissions" が
