@@ -7,6 +7,10 @@ name: Auto Merge
 #   2. ラベル付与時 (pull_request_target: labeled) — 既に CI が緑の PR にラベルが
 #      付いたら即マージ。まだ CI 実行中なら何もしない (1 の経路が後で処理する)
 #
+# マージ後、デフォルトブランチが対象なら Pages デプロイ (deploy-pages.yml) を
+# 明示的に起動する。GITHUB_TOKEN によるマージ push は他ワークフローを起動しない
+# 仕様のため、この明示ディスパッチで「自動マージ → デプロイ」を連鎖させる。
+#
 # セキュリティ: リポジトリのコードを checkout せず GitHub API のみを使うため、
 # pull_request_target でも untrusted code は実行しない。
 
@@ -20,7 +24,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  actions: read
+  actions: write
 
 concurrency:
   group: auto-merge-${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
@@ -86,6 +90,24 @@ jobs:
                 core.info(`PR #${number}: merged via ${MERGE_METHOD}. 🎉`);
               } catch (e) {
                 core.warning(`PR #${number}: merge failed — ${e.message}`);
+                return;
+              }
+
+              // GITHUB_TOKEN によるマージ push は他ワークフローを起動しない仕様のため、
+              // デフォルトブランチへマージした場合は Pages デプロイを明示的に起動する。
+              // (workflow_dispatch は GITHUB_TOKEN でも run を作成できる例外)
+              const { data: repoInfo } = await github.rest.repos.get({ owner, repo });
+              if (pr.base.ref === repoInfo.default_branch) {
+                try {
+                  await github.rest.actions.createWorkflowDispatch({
+                    owner, repo,
+                    workflow_id: 'deploy-pages.yml',
+                    ref: repoInfo.default_branch,
+                  });
+                  core.info(`Dispatched deploy-pages.yml on ${repoInfo.default_branch}.`);
+                } catch (e) {
+                  core.warning(`Deploy dispatch skipped — ${e.message}`);
+                }
               }
             }
 
