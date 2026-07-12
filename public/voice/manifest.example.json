@@ -1,0 +1,8 @@
+{
+  "_comment": "このファイルを manifest.json にリネームし、クリップ(mp3)を同じフォルダに置くと録音音声が使われます",
+  "up": "clip01.mp3",
+  "down": "clip02.mp3",
+  "close": "clip03.mp3",
+  "open": "clip04.mp3",
+  "arrive": "clip05.mp3"
+}

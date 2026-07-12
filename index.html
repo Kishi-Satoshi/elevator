@@ -31,7 +31,11 @@ canvas{display:block;}
 #hud-top .brand .mark{width:9px;height:9px;background:var(--red);transform:rotate(45deg);}
 #hud-top .brand h1{font-family:Inter,sans-serif;font-weight:200;font-size:15px;letter-spacing:.32em;margin:0;}
 #hud-top .brand small{font-size:10px;color:var(--sub);letter-spacing:.14em;}
+#hud-top .right{display:flex;align-items:center;gap:18px;}
 #hud-top .note{font-size:9.5px;color:#565b63;letter-spacing:.12em;}
+#homeBtn{all:unset;pointer-events:auto;cursor:pointer;border:1px solid var(--hair);
+  padding:7px 16px;font-size:10px;letter-spacing:.24em;color:var(--sub);transition:.25s;display:none;}
+#homeBtn:hover{color:var(--ink);border-color:rgba(255,255,255,.45);}
 
 /* ---------- フロアHUD ---------- */
 #floorHud{position:fixed;left:26px;bottom:28px;z-index:30;pointer-events:none;
@@ -131,6 +135,18 @@ canvas{display:block;}
 #intro{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
   background:var(--void);}
 #intro .inner{width:min(680px,90vw);}
+/* CSSアニメで確実に表示 (JS依存だとスタートボタンが出ないことがあった) */
+#intro .inner > *{opacity:0;animation:introRise .8s cubic-bezier(.22,1,.36,1) forwards;}
+#intro .inner > *:nth-child(1){animation-delay:.08s}
+#intro .inner > *:nth-child(2){animation-delay:.16s}
+#intro .inner > *:nth-child(3){animation-delay:.24s}
+#intro .inner > *:nth-child(4){animation-delay:.32s}
+#intro .inner > *:nth-child(5){animation-delay:.40s}
+#intro .inner > *:nth-child(6){animation-delay:.48s}
+#intro .inner > *:nth-child(7){animation-delay:.56s}
+#intro .inner > *:nth-child(8){animation-delay:.64s}
+#intro .inner > *:nth-child(9){animation-delay:.72s}
+@keyframes introRise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
 #intro .eyebrow{margin-bottom:14px;}
 #intro h2.title{font-family:Inter,sans-serif;font-weight:200;font-size:clamp(28px,5vw,46px);
   letter-spacing:.18em;margin:0 0 6px;}
@@ -193,7 +209,10 @@ canvas{display:block;}
     <h1>AXIEZ-LINKs <span style="color:var(--sub)">EXPERIENCE</span></h1>
     <small>意匠3Dシミュレーター（非公式）</small>
   </div>
-  <div class="note">DRAG : 視点移動 ／ SCROLL : ズーム ／ かご内のボタンもクリックできます</div>
+  <div class="right">
+    <div class="note">DRAG : 視点移動 ／ SCROLL : ズーム ／ かご内・乗場のボタンもクリックできます</div>
+    <button id="homeBtn">⌂ ホームへ</button>
+  </div>
 </header>
 
 <div id="floorHud" style="opacity:0">
@@ -222,6 +241,7 @@ canvas{display:block;}
       <div class="body"><div class="inner">
         <div class="floorbtns" id="floorBtns"></div>
         <div class="rowbtns">
+          <button class="ctl" id="btnFloor">フロアに出る</button>
           <button class="ctl" id="btnDoor">ドア開閉</button>
           <button class="ctl" id="btnView">視点リセット</button>
         </div>
@@ -238,8 +258,9 @@ canvas{display:block;}
       <button class="head"><span class="t"><span class="en">View</span><span class="jp">視点・アングル</span></span><span class="chev"></span></button>
       <div class="body"><div class="inner">
         <div class="toggles" style="margin-bottom:12px">
-          <div class="tgl active" data-view="cab">かご内視点</div>
-          <div class="tgl" data-view="doll">俯瞰ビュー</div>
+          <div class="tgl active" data-view="cab">かご内</div>
+          <div class="tgl" data-view="walk">フロア回遊</div>
+          <div class="tgl" data-view="doll">俯瞰</div>
         </div>
         <div class="eyebrow" style="margin-bottom:8px">PRESET ANGLE <b>プリセットアングル</b></div>
         <div class="grid5">
@@ -321,7 +342,7 @@ canvas{display:block;}
         <div class="rowbtns" style="margin-top:14px"><button class="ctl" id="btnShare">共有URLをコピー</button></div>
         <p style="font-size:9px;color:#4c5158;line-height:1.8;margin:14px 0 0">
           色名・品番（LA04 / CP132 / FQ630 等）は三菱電機ビルソリューションズのカタログを参考にした近似表現です。
-          音声はブラウザ合成音声によるデモであり、実機アナウンスの録音ではありません。本ツールは非公式です。
+          音声は既定でブラウザ合成音声のデモです（<code>public/voice/</code> にクリップを配置すると自動でそれを再生します）。本ツールは非公式です。
         </p>
       </div></div>
     </div>
