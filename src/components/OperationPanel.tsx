@@ -10,6 +10,7 @@ interface Props {
   buttonStyle: ButtonStyle;
   buttonColor: ButtonColor;
   copFinish: CopFinish;
+  isMoving?: boolean;
   onPressFloor: (floor: number) => void;
   onPressDoorOpen: () => void;
   onPressDoorClose: () => void;
@@ -23,6 +24,7 @@ export function OperationPanel({
   buttonStyle,
   buttonColor,
   copFinish,
+  isMoving = false,
   onPressFloor,
   onPressDoorOpen,
   onPressDoorClose,
@@ -54,7 +56,7 @@ export function OperationPanel({
 
       {/* Floor indicator (LCD) */}
       <div className="w-full max-w-[180px] relative z-10">
-        <FloorIndicator currentFloor={currentFloor} direction={direction} />
+        <FloorIndicator currentFloor={currentFloor} direction={direction} isMoving={isMoving} />
       </div>
 
       {/* Floor buttons - staggered 2-column (reverse-Z) */}

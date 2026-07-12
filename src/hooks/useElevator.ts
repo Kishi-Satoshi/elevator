@@ -1,10 +1,19 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { DoorState, Direction, AnnouncementLang } from '../lib/elevatorConfig';
-import { TIMING } from '../lib/elevatorConfig';
+import { TIMING, MOTION } from '../lib/elevatorConfig';
 import { useElevatorAudio } from './useElevatorAudio';
 
 interface UseElevatorOptions {
   language: AnnouncementLang;
+}
+
+/**
+ * 3Dシーン側がrefで毎フレーム読む走行状態。
+ * speed: 正規化速度 0..1 / accel: 正規化加速度 -1..1 (符号は進行方向基準)
+ */
+export interface MotionState {
+  speed: number;
+  accel: number;
 }
 
 export function useElevator({ language }: UseElevatorOptions) {
@@ -19,6 +28,8 @@ export function useElevator({ language }: UseElevatorOptions) {
   const currentFloorRef = useRef(1);
   const langRef = useRef(language);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const rafRef = useRef(0);
+  const motionRef = useRef<MotionState>({ speed: 0, accel: 0 });
 
   useEffect(() => {
     langRef.current = language;
@@ -36,6 +47,82 @@ export function useElevator({ language }: UseElevatorOptions) {
     timersRef.current.push(t);
     return t;
   }, []);
+
+  /**
+   * ジャーク制限つきS字プロファイルで from → to へ走行する。
+   * 加減速区間は正弦波ランプ (jerk が連続) で、実機のような
+   * 滑らかな乗り心地を再現する。毎フレーム motionRef を更新し、
+   * 走行音・かご振動・インジケーターが速度に追従する。
+   */
+  const startTravel = useCallback((from: number, to: number, onArrive: () => void) => {
+    const dist = Math.abs(to - from);
+    const dir = to > from ? 1 : -1;
+    const { vMax, accel: A } = MOTION;
+
+    // 正弦波ランプでは加減速距離 = vPeak * tRamp / 2 (台形と同じ)
+    let vPeak = vMax;
+    let tRamp = vMax / A;
+    let tCruise = 0;
+    const dRamp = (vMax * tRamp) / 2;
+    if (dist < 2 * dRamp) {
+      vPeak = Math.sqrt(A * dist);
+      tRamp = vPeak / A;
+    } else {
+      tCruise = (dist - 2 * dRamp) / vMax;
+    }
+    const tTotal = 2 * tRamp + tCruise;
+
+    audio.startTravelSound();
+    const t0 = performance.now();
+    let lastFloor = from;
+
+    const tick = () => {
+      const t = (performance.now() - t0) / 1000;
+      let s: number;
+      let v: number;
+      let a: number;
+
+      if (t < tRamp) {
+        // 加速: v = vPeak/2 * (1 - cos(πt/tRamp))
+        const phase = (Math.PI * t) / tRamp;
+        v = vPeak * 0.5 * (1 - Math.cos(phase));
+        s = vPeak * (t / 2 - (tRamp / (2 * Math.PI)) * Math.sin(phase));
+        a = ((vPeak * Math.PI) / (2 * tRamp)) * Math.sin(phase);
+      } else if (t < tRamp + tCruise) {
+        v = vPeak;
+        s = (vPeak * tRamp) / 2 + vPeak * (t - tRamp);
+        a = 0;
+      } else if (t < tTotal) {
+        const td = t - tRamp - tCruise;
+        const phase = (Math.PI * td) / tRamp;
+        v = vPeak * 0.5 * (1 + Math.cos(phase));
+        s = (vPeak * tRamp) / 2 + vPeak * tCruise
+          + vPeak * (td / 2 + (tRamp / (2 * Math.PI)) * Math.sin(phase));
+        a = -((vPeak * Math.PI) / (2 * tRamp)) * Math.sin(phase);
+      } else {
+        motionRef.current.speed = 0;
+        motionRef.current.accel = 0;
+        audio.stopTravelSound();
+        currentFloorRef.current = to;
+        setCurrentFloor(to);
+        onArrive();
+        return;
+      }
+
+      const pos = from + dir * s;
+      const passing = Math.max(1, Math.round(pos));
+      if (passing !== lastFloor) {
+        lastFloor = passing;
+        currentFloorRef.current = passing;
+        setCurrentFloor(passing);
+      }
+      motionRef.current.speed = v / vMax;
+      motionRef.current.accel = (a / A) * dir;
+      audio.updateTravelSound(v / vMax);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }, [audio]);
 
   const processQueue = useCallback(() => {
     if (processingRef.current) return;
@@ -71,24 +158,9 @@ export function useElevator({ language }: UseElevatorOptions) {
       audio.announceDirection(dir, langRef.current);
 
       addTimer(() => {
-        const floorsToTravel = Math.abs(target - cur);
-        const step = dir === 'up' ? 1 : -1;
-
         setIsMoving(true);
 
-        for (let i = 1; i <= floorsToTravel; i++) {
-          addTimer(() => {
-            audio.playMovingHum();
-          }, (i - 1) * TIMING.floorTravel);
-
-          addTimer(() => {
-            const newFloor = cur + step * i;
-            currentFloorRef.current = newFloor;
-            setCurrentFloor(newFloor);
-          }, i * TIMING.floorTravel - 200);
-        }
-
-        addTimer(() => {
+        startTravel(cur, target, () => {
           setIsMoving(false);
 
           if (dir === 'up') {
@@ -120,10 +192,10 @@ export function useElevator({ language }: UseElevatorOptions) {
               }
             }, TIMING.doorHoldOpen);
           }, 800 + TIMING.doorOpenClose);
-        }, floorsToTravel * TIMING.floorTravel);
+        });
       }, 800);
     }, 500 + TIMING.doorOpenClose);
-  }, [audio, addTimer]);
+  }, [audio, addTimer, startTravel]);
 
   const pressFloorButton = useCallback((floor: number) => {
     if (floor === currentFloorRef.current && !processingRef.current) return;
@@ -183,6 +255,7 @@ export function useElevator({ language }: UseElevatorOptions) {
   useEffect(() => {
     return () => {
       clearTimers();
+      cancelAnimationFrame(rafRef.current);
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
       }
@@ -195,6 +268,7 @@ export function useElevator({ language }: UseElevatorOptions) {
     doorState,
     isMoving,
     activeButtons,
+    motionRef,
     pressFloorButton,
     pressDoorOpen,
     pressDoorClose,

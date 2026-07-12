@@ -24,7 +24,7 @@ export function App() {
           <div className="text-center mb-4">
             <h1 className="text-xl font-bold text-slate-800">AXIEZ-LINKs</h1>
             <p className="text-xs text-slate-500 mt-1">
-              エレベーターシミュレーター (3D)
+              百貨店エレベーターシミュレーター (3D) — 停止階ごとに売場が変わります
             </p>
           </div>
 
@@ -40,6 +40,7 @@ export function App() {
               doorState={elevator.doorState}
               isMoving={elevator.isMoving}
               activeButtons={elevator.activeButtons}
+              motionRef={elevator.motionRef}
               onPressFloor={elevator.pressFloorButton}
               onPressDoorOpen={elevator.pressDoorOpen}
               onPressDoorClose={elevator.pressDoorClose}
