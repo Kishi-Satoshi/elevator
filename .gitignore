@@ -3,3 +3,7 @@ dist
 *.local
 .env
 .DS_Store
+
+# 録音音声クリップは既定でコミットしない (権利確認のうえ必要なら明示的に追加)
+public/voice/*.mp3
+public/voice/manifest.json
