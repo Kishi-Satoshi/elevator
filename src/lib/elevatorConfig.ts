@@ -1,3 +1,5 @@
+import { getFloorTheme } from './floorThemes';
+
 export type ElevatorTheme = 'LUXURY' | 'NATURAL' | 'COMFORT' | 'MODERN';
 export type ButtonStyle = 'crystal' | 'stainless' | 'large';
 export type ButtonColor = 'amber' | 'blue' | 'white';
@@ -35,10 +37,18 @@ export const MIN_FLOOR = 1;
 export const MAX_FLOOR = 20;
 
 export const TIMING = {
-  floorTravel: 1500,
   doorOpenClose: 2000,
-  doorHoldOpen: 3000,
+  doorHoldOpen: 4500,
   announcementDelay: 300,
+};
+
+/**
+ * 走行プロファイル (ジャーク制限つきS字加減速)。
+ * 加減速は正弦波ランプで滑らかに立ち上がる。単位: floor/s, floor/s^2
+ */
+export const MOTION = {
+  vMax: 2.2,
+  accel: 1.1,
 };
 
 export const BUTTON_COLOR_VALUES: Record<ButtonColor, { active: string; glow: string; label: string }> = {
@@ -88,22 +98,29 @@ const EN_FLOOR_NAMES: Record<number, string> = {
   16: 'Sixteenth', 17: 'Seventeenth', 18: 'Eighteenth', 19: 'Nineteenth', 20: 'Twentieth',
 };
 
+/**
+ * 到着アナウンス (百貨店式)。
+ * 例:「3階、婦人服・ハンドバッグ売場でございます」
+ */
 export function getFloorAnnouncement(floor: number, lang: AnnouncementLang): string {
+  const theme = getFloorTheme(floor);
   if (lang === 'ja') {
-    return `${JP_FLOOR_READINGS[floor] ?? `${floor}かい`}でございます`;
+    const floorRead = JP_FLOOR_READINGS[floor] ?? `${floor}かい`;
+    return `${floorRead}、${theme.readJa}うりばでございます`;
   }
-  return `${EN_FLOOR_NAMES[floor] ?? `Floor ${floor}`} floor`;
+  const floorName = EN_FLOOR_NAMES[floor] ?? `Floor ${floor}`;
+  return `${floorName} floor. ${theme.readEn}.`;
 }
 
 export function getDirectionAnnouncement(dir: 'up' | 'down', lang: AnnouncementLang): string {
   if (lang === 'ja') {
-    return dir === 'up' ? 'うえにまいります' : 'したにまいります';
+    return dir === 'up' ? 'うえへまいります' : 'したへまいります';
   }
   return dir === 'up' ? 'Going up' : 'Going down';
 }
 
 export function getDoorClosingAnnouncement(lang: AnnouncementLang): string {
-  return lang === 'ja' ? 'ドアがしまります' : 'Doors closing';
+  return lang === 'ja' ? 'ドアがしまります。ごちゅういください' : 'Doors closing. Please stand clear';
 }
 
 export function loadConfig(): ElevatorConfig {

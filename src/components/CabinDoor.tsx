@@ -66,9 +66,10 @@ export function CabinDoor({
       );
     }
 
-    // 正面壁と同じフェード判定
+    // 正面壁と同じフェード判定 (カメラがドアの外側にいるときのみ)
     camDir.copy(cabinCenter).sub(camera.position).normalize();
-    const dot = camDir.dot(normal);
+    const outside = camera.position.z > z - 0.05;
+    const dot = outside ? camDir.dot(normal) : 0;
     const t = Math.max(0, Math.min(1, dot / Math.sin(fadeThreshold)));
     const targetOpacity = 1 - t;
 

@@ -1,18 +1,20 @@
 import { useRef, useMemo } from 'react';
 import type { RefObject } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
+import { MeshReflectorMaterial } from '@react-three/drei';
 import * as THREE from 'three';
+import type { CabinStylePreset } from '../lib/stylePresets';
 
 /**
  * CabinWalls
  * ------------------------------------------------------------
- * エレベーター かご室の4面壁 + 鏡を描画するコンポーネント。
+ * かご室の4面壁 + 鏡 + 床 + 天井を描画するコンポーネント。
  *
- * カメラの向きに応じて、視線を遮る側の壁を自動的にフェードアウトさせる。
- * (後ろから見たとき背面壁と鏡が邪魔にならないようにする)
- *
- * 正面壁(ドア側)は README の指示に従い、ドア開口の左右袖壁 + 欄間の
- * 3枚に分割している。ドア本体は CabinDoor コンポーネントが描画する。
+ * - 床: MeshReflectorMaterial による実反射 (テーマごとの強度)
+ * - 鏡: 背面壁の実像リフレクター
+ * - 天井: プリセットの照明方式 (間接/パネル/ダウンライト/全面発光)
+ * - 手すり: 木製 / ブロンズ / ステンレス / フラットバー
+ * - カメラの向きに応じて視線を遮る壁を自動フェード
  * ------------------------------------------------------------
  */
 
@@ -23,25 +25,12 @@ export interface CabinSize {
 }
 
 interface CabinWallsProps {
-  /** かご室の内寸 (m) */
   size?: CabinSize;
-  /** 正面/背面壁の色 */
-  wallColor?: string;
-  /** 側面壁の色 */
-  sideWallColor?: string;
-  /** 天井の色 */
-  ceilingColor?: string;
-  /** 床の色 */
-  floorColor?: string;
-  /** 鏡の最大不透明度 (0..1) */
+  preset: CabinStylePreset;
   mirrorOpacityMax?: number;
-  /** フェード開始角度 (rad, デフォルト 45°) */
   fadeThreshold?: number;
-  /** 背面壁に鏡を表示するか */
   showMirror?: boolean;
-  /** 正面壁のドア開口幅 (m) */
   doorWidth?: number;
-  /** 正面壁のドア開口高 (m) */
   doorHeight?: number;
 }
 
@@ -50,211 +39,300 @@ type MatRef = RefObject<THREE.MeshStandardMaterial | null>;
 interface WallInfo {
   refs: MatRef[];
   normal: THREE.Vector3;
-  mirror?: RefObject<THREE.MeshPhysicalMaterial | null>;
+  /** 壁面の法線方向オフセット (かご中心から壁面までの距離) */
+  planeOffset: number;
+  /** 壁フェード時に非表示にする付随オブジェクト (鏡・手すり) */
+  group?: RefObject<THREE.Group | null>;
 }
+
+const HANDRAIL_COLORS: Record<CabinStylePreset['handrail'], { color: string; metalness: number; roughness: number }> = {
+  wood: { color: '#c08850', metalness: 0.05, roughness: 0.55 },
+  bronze: { color: '#4a3c34', metalness: 0.75, roughness: 0.35 },
+  steel: { color: '#b0b6bc', metalness: 0.9, roughness: 0.25 },
+  flatbar: { color: '#c0c6cc', metalness: 0.9, roughness: 0.3 },
+};
 
 export function CabinWalls({
   size = { w: 1.4, h: 2.3, d: 1.35 },
-  wallColor = '#f0e8d8',
-  sideWallColor = '#d0b088',
-  ceilingColor = '#ffffff',
-  floorColor = '#2a2a2a',
-  mirrorOpacityMax = 0.55,
-  fadeThreshold = Math.PI / 4, // 45°
+  preset,
+  fadeThreshold = Math.PI / 4,
   showMirror = true,
   doorWidth = 0.75,
   doorHeight = 2.0,
 }: CabinWallsProps) {
   const { camera } = useThree();
 
-  // 各壁の materialRef
   const backWallRef = useRef<THREE.MeshStandardMaterial>(null);
   const frontLeftRef = useRef<THREE.MeshStandardMaterial>(null);
   const frontRightRef = useRef<THREE.MeshStandardMaterial>(null);
   const transomRef = useRef<THREE.MeshStandardMaterial>(null);
   const leftWallRef = useRef<THREE.MeshStandardMaterial>(null);
   const rightWallRef = useRef<THREE.MeshStandardMaterial>(null);
-  const mirrorRef = useRef<THREE.MeshPhysicalMaterial>(null);
+  const backGroupRef = useRef<THREE.Group>(null);
+  const leftGroupRef = useRef<THREE.Group>(null);
+  const rightGroupRef = useRef<THREE.Group>(null);
 
-  // かごの中心を仮に (0, h/2, 0) と定義
   const cabinCenter = useMemo(
     () => new THREE.Vector3(0, size.h / 2, 0),
     [size.h]
   );
 
-  // 各壁の外向き法線 (ワールド座標基準)
-  // 背面壁: -Z 側にあるので法線は -Z 方向 (かご外に向かって)
-  // 正面壁(ドア側): +Z (袖壁2枚 + 欄間で共有)
-  // 左壁: -X, 右壁: +X
   const wallInfos = useMemo<WallInfo[]>(
     () => [
-      { refs: [backWallRef], normal: new THREE.Vector3(0, 0, -1), mirror: mirrorRef },
-      { refs: [frontLeftRef, frontRightRef, transomRef], normal: new THREE.Vector3(0, 0, 1) },
-      { refs: [leftWallRef], normal: new THREE.Vector3(-1, 0, 0) },
-      { refs: [rightWallRef], normal: new THREE.Vector3(1, 0, 0) },
+      { refs: [backWallRef], normal: new THREE.Vector3(0, 0, -1), planeOffset: size.d / 2, group: backGroupRef },
+      { refs: [frontLeftRef, frontRightRef, transomRef], normal: new THREE.Vector3(0, 0, 1), planeOffset: size.d / 2 },
+      { refs: [leftWallRef], normal: new THREE.Vector3(-1, 0, 0), planeOffset: size.w / 2, group: leftGroupRef },
+      { refs: [rightWallRef], normal: new THREE.Vector3(1, 0, 0), planeOffset: size.w / 2, group: rightGroupRef },
     ],
-    []
+    [size.w, size.d]
   );
 
-  // 一時ベクトル (毎フレーム new しない)
   const camDir = useMemo(() => new THREE.Vector3(), []);
 
   useFrame(() => {
-    // カメラからかご中心へのベクトル
     camDir.copy(cabinCenter).sub(camera.position).normalize();
 
-    wallInfos.forEach(({ refs, normal, mirror }) => {
-      // カメラの視線方向と壁の外向き法線の内積
-      //   dot > 0 : カメラが壁の外側から中心を見ている
-      //             = カメラと中心の間にその壁がある = フェードすべき
-      //   dot < 0 : カメラが壁の内側にいる = 通常表示
-      const dot = camDir.dot(normal);
-
-      // dot を [0..1] のフェード係数に変換
-      //   dot <= 0        : 完全表示 (opacity 1)
-      //   dot >= sin(threshold) : ほぼ透明
-      //   その間は線形補間
+    wallInfos.forEach(({ refs, normal, planeOffset, group }) => {
+      // カメラが壁面の外側にいるときだけフェード対象にする
+      // (かご内から見たときに壁やドアが透けるのを防ぐ)
+      const outside = camera.position.dot(normal) > planeOffset - 0.05;
+      const dot = outside ? camDir.dot(normal) : 0;
       const t = Math.max(0, Math.min(1, dot / Math.sin(fadeThreshold)));
       const targetOpacity = 1 - t;
 
       refs.forEach((ref) => {
         if (!ref.current) return;
-        // なめらかに追従 (lerp)
         const mat = ref.current;
         mat.opacity = THREE.MathUtils.lerp(mat.opacity, targetOpacity, 0.15);
-        // 完全に透明に近いときは描画スキップ
         mat.visible = mat.opacity > 0.02;
       });
 
-      // 対応する鏡も同じフェード
-      if (mirror?.current) {
-        const mirrorTarget = targetOpacity * mirrorOpacityMax;
-        mirror.current.opacity = THREE.MathUtils.lerp(
-          mirror.current.opacity,
-          mirrorTarget,
-          0.15
-        );
-        mirror.current.visible = mirror.current.opacity > 0.02;
+      // 鏡や手すりはリフレクター材質のため透過フェードできない。
+      // 壁が概ね透けたら丸ごと非表示にする。
+      if (group?.current) {
+        group.current.visible = targetOpacity > 0.4;
       }
     });
   });
 
   const { w, h, d } = size;
-
-  // 正面袖壁の寸法
   const wingW = (w - doorWidth) / 2;
   const transomH = h - doorHeight;
+  const rail = HANDRAIL_COLORS[preset.handrail];
+  const railY = 0.82;
+  const railR = preset.handrail === 'flatbar' ? 0.015 : 0.019;
+
+  const wallMatProps = {
+    metalness: preset.wallMetalness,
+    roughness: preset.wallRoughness,
+    transparent: true,
+    opacity: 1,
+    side: THREE.DoubleSide,
+  } as const;
 
   return (
     <group>
-      {/* ─── 床 ─── */}
-      <mesh position={[0, 0, 0]} receiveShadow>
+      {/* ─── 床: 実反射 ─── */}
+      <mesh position={[0, 0.011, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[w - 0.02, d - 0.02]} />
+        <MeshReflectorMaterial
+          color={preset.floorColor}
+          resolution={512}
+          blur={[300, 100]}
+          mixBlur={0.9}
+          mixStrength={preset.floorReflect * 2.2}
+          roughness={0.55}
+          metalness={0.15}
+          mirror={0.4}
+          depthScale={0.4}
+          minDepthThreshold={0.4}
+          maxDepthThreshold={1.2}
+        />
+      </mesh>
+      {/* 床下地 (反射面の裏抜け防止) */}
+      <mesh position={[0, 0, 0]}>
         <boxGeometry args={[w, 0.02, d]} />
-        <meshStandardMaterial color={floorColor} roughness={0.7} metalness={0.1} />
+        <meshStandardMaterial color={preset.floorColor} roughness={0.8} />
       </mesh>
 
       {/* ─── 天井 ─── */}
-      <mesh position={[0, h, 0]}>
-        <boxGeometry args={[w, 0.02, d]} />
-        <meshStandardMaterial
-          color={ceilingColor}
-          emissive={ceilingColor}
-          emissiveIntensity={0.15}
-          roughness={0.6}
-        />
-      </mesh>
+      <CabinCeiling size={size} preset={preset} />
 
       {/* ─── 背面壁 (奥・-Z 側) ─── */}
       <mesh position={[0, h / 2, -d / 2]}>
         <planeGeometry args={[w, h]} />
-        <meshStandardMaterial
-          ref={backWallRef}
-          color={wallColor}
-          roughness={0.5}
-          transparent
-          opacity={1}
-          side={THREE.DoubleSide}
-        />
+        <meshStandardMaterial ref={backWallRef} color={preset.wallColor} {...wallMatProps} />
       </mesh>
 
-      {/* ─── 背面の鏡 (背面壁の少し内側に浮かせる) ─── */}
-      {showMirror && (
-        <mesh position={[0, h * 0.55, -d / 2 + 0.005]}>
-          <planeGeometry args={[w * 0.5, h * 0.55]} />
-          <meshPhysicalMaterial
-            ref={mirrorRef}
-            color="#ffffff"
-            roughness={0.05}
-            metalness={0.9}
-            transparent
-            opacity={mirrorOpacityMax}
-            side={THREE.DoubleSide}
-          />
+      {/* ─── 背面: 実像ミラー + 手すり ─── */}
+      <group ref={backGroupRef}>
+        {showMirror && (
+          <mesh position={[0, h * 0.58, -d / 2 + 0.012]}>
+            <planeGeometry args={[w * 0.52, h * 0.58]} />
+            <MeshReflectorMaterial
+              color="#f2f4f6"
+              resolution={512}
+              blur={[80, 40]}
+              mixBlur={0.15}
+              mixStrength={3.2}
+              roughness={0.08}
+              metalness={0.6}
+              mirror={0.9}
+            />
+          </mesh>
+        )}
+        {/* ミラー枠 */}
+        {showMirror && (
+          <mesh position={[0, h * 0.58, -d / 2 + 0.008]}>
+            <planeGeometry args={[w * 0.54, h * 0.6]} />
+            <meshStandardMaterial color="#8a9096" metalness={0.85} roughness={0.3} />
+          </mesh>
+        )}
+        {/* 背面手すり */}
+        <mesh position={[0, railY, -d / 2 + 0.055]} rotation={[0, 0, Math.PI / 2]}>
+          {preset.handrail === 'flatbar'
+            ? <boxGeometry args={[0.04, w * 0.8, 0.012]} />
+            : <cylinderGeometry args={[railR, railR, w * 0.8, 12]} />}
+          <meshStandardMaterial {...rail} />
         </mesh>
-      )}
+        {[-w * 0.34, w * 0.34].map((x) => (
+          <mesh key={x} position={[x, railY, -d / 2 + 0.028]} rotation={[Math.PI / 2, 0, 0]}>
+            <cylinderGeometry args={[0.011, 0.011, 0.055, 8]} />
+            <meshStandardMaterial color="#7a8086" metalness={0.85} roughness={0.3} />
+          </mesh>
+        ))}
+      </group>
 
-      {/* ─── 正面壁 (ドア側・+Z): 左右の袖壁 + 欄間 ─── */}
+      {/* ─── 正面壁 (ドア側・+Z): 袖壁 + 欄間 ─── */}
       <mesh position={[-(doorWidth / 2 + wingW / 2), h / 2, d / 2]}>
         <planeGeometry args={[wingW, h]} />
-        <meshStandardMaterial
-          ref={frontLeftRef}
-          color={wallColor}
-          roughness={0.5}
-          transparent
-          opacity={1}
-          side={THREE.DoubleSide}
-        />
+        <meshStandardMaterial ref={frontLeftRef} color={preset.wallColor} {...wallMatProps} />
       </mesh>
       <mesh position={[doorWidth / 2 + wingW / 2, h / 2, d / 2]}>
         <planeGeometry args={[wingW, h]} />
-        <meshStandardMaterial
-          ref={frontRightRef}
-          color={wallColor}
-          roughness={0.5}
-          transparent
-          opacity={1}
-          side={THREE.DoubleSide}
-        />
+        <meshStandardMaterial ref={frontRightRef} color={preset.wallColor} {...wallMatProps} />
       </mesh>
       {transomH > 0.01 && (
         <mesh position={[0, doorHeight + transomH / 2, d / 2]}>
           <planeGeometry args={[doorWidth, transomH]} />
+          <meshStandardMaterial ref={transomRef} color={preset.wallColor} {...wallMatProps} />
+        </mesh>
+      )}
+
+      {/* ─── 左壁 + 手すり ─── */}
+      <mesh position={[-w / 2, h / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
+        <planeGeometry args={[d, h]} />
+        <meshStandardMaterial ref={leftWallRef} color={preset.sideWallColor} {...wallMatProps} />
+      </mesh>
+      <group ref={leftGroupRef}>
+        <mesh position={[-w / 2 + 0.055, railY, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          {preset.handrail === 'flatbar'
+            ? <boxGeometry args={[0.04, d * 0.7, 0.012]} />
+            : <cylinderGeometry args={[railR, railR, d * 0.7, 12]} />}
+          <meshStandardMaterial {...rail} />
+        </mesh>
+      </group>
+
+      {/* ─── 右壁 + 手すり ─── */}
+      <mesh position={[w / 2, h / 2, 0]} rotation={[0, -Math.PI / 2, 0]}>
+        <planeGeometry args={[d, h]} />
+        <meshStandardMaterial ref={rightWallRef} color={preset.sideWallColor} {...wallMatProps} />
+      </mesh>
+      <group ref={rightGroupRef}>
+        <mesh position={[w / 2 - 0.055, railY, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          {preset.handrail === 'flatbar'
+            ? <boxGeometry args={[0.04, d * 0.7, 0.012]} />
+            : <cylinderGeometry args={[railR, railR, d * 0.7, 12]} />}
+          <meshStandardMaterial {...rail} />
+        </mesh>
+      </group>
+
+      {/* ─── 幅木 (ステンレスキックプレート) ─── */}
+      {([
+        [0, -d / 2 + 0.006, 0, w],
+        [-w / 2 + 0.006, 0, Math.PI / 2, d],
+        [w / 2 - 0.006, 0, Math.PI / 2, d],
+      ] as [number, number, number, number][]).map(([x, z, rotY, len], i) => (
+        <mesh key={i} position={[x, 0.05, z]} rotation={[0, rotY, 0]}>
+          <boxGeometry args={[len, 0.08, 0.008]} />
+          <meshStandardMaterial color="#9aa0a6" metalness={0.9} roughness={0.25} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+/** テーマごとの天井照明方式 */
+function CabinCeiling({ size, preset }: { size: CabinSize; preset: CabinStylePreset }) {
+  const { w, h, d } = size;
+  const style = preset.ceilingStyle;
+
+  return (
+    <group>
+      {/* 天井面 */}
+      <mesh position={[0, h, 0]}>
+        <boxGeometry args={[w, 0.02, d]} />
+        <meshStandardMaterial
+          color={preset.ceilingColor}
+          emissive={style === 'luminous' ? preset.lightColor : preset.ceilingColor}
+          emissiveIntensity={style === 'luminous' ? 0.7 : 0.08}
+          roughness={0.6}
+        />
+      </mesh>
+
+      {style === 'indirect' && (
+        <>
+          {/* 周縁の間接照明スリット (Premium) */}
+          {([
+            [0, -d / 2 + 0.07, 0, w - 0.12],
+            [0, d / 2 - 0.07, 0, w - 0.12],
+            [-w / 2 + 0.07, 0, Math.PI / 2, d - 0.12],
+            [w / 2 - 0.07, 0, Math.PI / 2, d - 0.12],
+          ] as [number, number, number, number][]).map(([x, z, rotY, len], i) => (
+            <mesh key={i} position={[x, h - 0.035, z]} rotation={[0, rotY, 0]}>
+              <boxGeometry args={[len, 0.012, 0.05]} />
+              <meshStandardMaterial
+                color={preset.lightColor}
+                emissive={preset.lightColor}
+                emissiveIntensity={2.4}
+              />
+            </mesh>
+          ))}
+          {/* 中央の折り上げパネル */}
+          <mesh position={[0, h - 0.05, 0]}>
+            <boxGeometry args={[w - 0.3, 0.02, d - 0.3]} />
+            <meshStandardMaterial color={preset.ceilingColor} roughness={0.5} />
+          </mesh>
+        </>
+      )}
+
+      {style === 'panel' && (
+        <mesh position={[0, h - 0.012, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <planeGeometry args={[w * 0.45, d * 0.45]} />
           <meshStandardMaterial
-            ref={transomRef}
-            color={wallColor}
-            roughness={0.5}
-            transparent
-            opacity={1}
+            color={preset.lightColor}
+            emissive={preset.lightColor}
+            emissiveIntensity={1.8}
             side={THREE.DoubleSide}
           />
         </mesh>
       )}
 
-      {/* ─── 左壁 ─── */}
-      <mesh position={[-w / 2, h / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
-        <planeGeometry args={[d, h]} />
-        <meshStandardMaterial
-          ref={leftWallRef}
-          color={sideWallColor}
-          roughness={0.5}
-          transparent
-          opacity={1}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-
-      {/* ─── 右壁 ─── */}
-      <mesh position={[w / 2, h / 2, 0]} rotation={[0, -Math.PI / 2, 0]}>
-        <planeGeometry args={[d, h]} />
-        <meshStandardMaterial
-          ref={rightWallRef}
-          color={sideWallColor}
-          roughness={0.5}
-          transparent
-          opacity={1}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
+      {style === 'downlight' && (
+        <>
+          {([[-w * 0.28, -d * 0.28], [w * 0.28, -d * 0.28], [-w * 0.28, d * 0.28], [w * 0.28, d * 0.28]] as [number, number][]).map(([x, z], i) => (
+            <mesh key={i} position={[x, h - 0.012, z]} rotation={[Math.PI / 2, 0, 0]}>
+              <circleGeometry args={[0.055, 16]} />
+              <meshStandardMaterial
+                color={preset.lightColor}
+                emissive={preset.lightColor}
+                emissiveIntensity={2.6}
+                side={THREE.DoubleSide}
+              />
+            </mesh>
+          ))}
+        </>
+      )}
     </group>
   );
 }
