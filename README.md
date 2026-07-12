@@ -1,5 +1,10 @@
 # AXIEZ-LINKs エレベーターシミュレーター
 
+[![CI](https://github.com/Kishi-Satoshi/elevator/actions/workflows/ci.yml/badge.svg)](https://github.com/Kishi-Satoshi/elevator/actions/workflows/ci.yml)
+[![Deploy](https://github.com/Kishi-Satoshi/elevator/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/Kishi-Satoshi/elevator/actions/workflows/deploy-pages.yml)
+
+🔗 **ライブデモ**: https://kishi-satoshi.github.io/elevator/
+
 三菱電機ビルソリューションズの「AXIEZ-LINKs」を模した、3Dエレベーターシミュレーターゲームです。
 React Three Fiber によるリアルなかご内ビジュアルで、1〜20階のボタン操作・チャイム・日英音声アナウンスを再現しています。
 
