@@ -35,6 +35,29 @@ npm run build    # 型チェック + プロダクションビルド
 npm run preview  # ビルド成果物のプレビュー
 ```
 
+## CI / 自動マージ
+
+`.github/workflows/` に2つの GitHub Actions を用意しています。
+
+| ワークフロー | 役割 |
+|---|---|
+| `ci.yml` | PR と `main` への push で `npm ci` → `npm run build`（型チェック + ビルド）を実行 |
+| `auto-merge.yml` | **`auto-merge` ラベル**が付いた PR を、CI 成功後に自動で **Squash マージ** |
+
+### 使い方
+
+1. PR を作成する
+2. PR に `auto-merge` ラベルを付ける
+3. CI（ビルド）が緑になると自動的に Squash マージされる
+
+CI が失敗している間、または未実行の間はマージされません。ラベルを付けた時点で
+既に CI が緑なら即マージ、まだ実行中なら CI 完了時にマージされます。
+
+> **初回セットアップ**: `auto-merge` ラベルがリポジトリに無い場合は、一度だけ
+> GitHub の Issues/PR のラベル画面、または `gh label create auto-merge` で作成してください。
+> ワークフローの実行には Settings → Actions → General の "Workflow permissions" が
+> **Read and write** になっている必要があります。
+
 ## スタック
 
 React 19 / TypeScript 5.9 / Vite 7 / Tailwind CSS 4 / three.js + @react-three/fiber + @react-three/drei

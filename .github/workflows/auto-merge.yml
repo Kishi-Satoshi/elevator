@@ -1,0 +1,116 @@
+name: Auto Merge
+
+# 「auto-merge」ラベルが付いた PR を、CI が成功したら自動で Squash マージする。
+#
+# 2つの経路で発火する:
+#   1. CI 完了時 (workflow_run) — CI が緑になった瞬間に、ラベル付き PR をマージ
+#   2. ラベル付与時 (pull_request_target: labeled) — 既に CI が緑の PR にラベルが
+#      付いたら即マージ。まだ CI 実行中なら何もしない (1 の経路が後で処理する)
+#
+# セキュリティ: リポジトリのコードを checkout せず GitHub API のみを使うため、
+# pull_request_target でも untrusted code は実行しない。
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: auto-merge-${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    name: Auto Merge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const LABEL = 'auto-merge';
+            const MERGE_METHOD = 'squash';
+            const { owner, repo } = context.repo;
+
+            // 指定 SHA の CI ワークフローが success で完了しているか
+            async function ciPassed(sha) {
+              const runs = await github.paginate(
+                github.rest.actions.listWorkflowRunsForRepo,
+                { owner, repo, head_sha: sha, per_page: 100 }
+              );
+              const ci = runs.filter(r => r.name === 'CI');
+              if (ci.length === 0) return false;
+              // 最新の CI run を採用
+              ci.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+              return ci[0].status === 'completed' && ci[0].conclusion === 'success';
+            }
+
+            async function tryMerge(number) {
+              const { data: pr } = await github.rest.pulls.get({
+                owner, repo, pull_number: number,
+              });
+
+              if (pr.state !== 'open') { core.info(`PR #${number}: not open, skip.`); return; }
+              if (pr.draft) { core.info(`PR #${number}: draft, skip.`); return; }
+
+              const hasLabel = (pr.labels || []).some(l => l.name === LABEL);
+              if (!hasLabel) { core.info(`PR #${number}: no '${LABEL}' label, skip.`); return; }
+
+              if (!(await ciPassed(pr.head.sha))) {
+                core.info(`PR #${number}: CI not passed for ${pr.head.sha}, skip (will retry on CI completion).`);
+                return;
+              }
+
+              // マージ可能性 (mergeable は非同期計算のため null のことがある → 少し待つ)
+              let mergeable = pr.mergeable;
+              for (let i = 0; mergeable === null && i < 5; i++) {
+                await new Promise(r => setTimeout(r, 2000));
+                const { data: fresh } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+                mergeable = fresh.mergeable;
+              }
+              if (mergeable === false) {
+                core.warning(`PR #${number}: not mergeable (conflicts?), skip.`);
+                return;
+              }
+
+              try {
+                await github.rest.pulls.merge({
+                  owner, repo, pull_number: number, merge_method: MERGE_METHOD,
+                });
+                core.info(`PR #${number}: merged via ${MERGE_METHOD}. 🎉`);
+              } catch (e) {
+                core.warning(`PR #${number}: merge failed — ${e.message}`);
+              }
+            }
+
+            // ---- イベントごとに対象 PR を決定 ----
+            if (context.eventName === 'pull_request_target') {
+              await tryMerge(context.payload.pull_request.number);
+              return;
+            }
+
+            if (context.eventName === 'workflow_run') {
+              const run = context.payload.workflow_run;
+              if (run.conclusion !== 'success') {
+                core.info(`CI conclusion=${run.conclusion}, nothing to merge.`);
+                return;
+              }
+              let prs = run.pull_requests || [];
+              // fork 由来などで空の場合は head ブランチから open PR を検索
+              if (prs.length === 0) {
+                const { data } = await github.rest.pulls.list({
+                  owner, repo, state: 'open',
+                  head: `${owner}:${run.head_branch}`,
+                });
+                prs = data;
+              }
+              for (const pr of prs) {
+                await tryMerge(pr.number);
+              }
+            }
