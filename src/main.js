@@ -3,6 +3,10 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
 import gsap from 'gsap';
+import {
+  initVoxel, buildFloorVoxels, enterFPMode, exitFPMode, relockFP,
+  isFPActive, updateVoxel, voxelPointerAction, voxelTextures, shellTexturesFor,
+} from './voxel.js';
 
 /* =====================================================================
    機種データ（AXIEZ-LINKs：カタログ参考の近似値）
@@ -155,7 +159,7 @@ function applyLimits(m) {
 }
 function flyTo(pos, tgt, dur = 1.4) {
   gsap.to(camera.position, { x: pos[0], y: pos[1], z: pos[2], duration: dur, ease: 'power3.inOut' });
-  gsap.to(controls.target, { x: tgt[0], y: tgt[1], z: tgt[2], duration: dur, ease: 'power3.inOut', onUpdate: () => controls.update() });
+  gsap.to(controls.target, { x: tgt[0], y: tgt[1], z: tgt[2], duration: dur, ease: 'power3.inOut', onUpdate: () => { if (!isFPActive()) controls.update(); } });
 }
 function resetView(immediate) {
   const p = viewPose(S.view);
@@ -166,6 +170,7 @@ function resetView(immediate) {
 function setView(mode) {
   if (mode === 'walk') { enterFloor(); return; }
   clearDepartTimer();
+  exitFPMode();
   S.view = mode;
   applyLimits(mode);
   if (mode === 'doll' && S.doorsOpen && !S.moving) doors(false, 1.1); // 俯瞰時は戸閉で模型らしく
@@ -188,6 +193,7 @@ const ANGLES = {
 function goAngle(k) {
   if (S.view !== 'cab') {
     clearDepartTimer();
+    exitFPMode();
     S.view = 'cab'; applyLimits('cab');
     if (cab.userData.hallGroup) cab.userData.hallGroup.visible = true;
     syncViewToggles(); updateFloorBtnLabel();
@@ -207,6 +213,7 @@ addEventListener('resize', () => {
 const KEEP_TEX = new Set();
 function disposeObject(root) {
   root.traverse(o => {
+    if (o.userData?.shared) return; // ボクセル等の共有ジオメトリ/マテリアルは破棄しない
     o.geometry?.dispose?.();
     const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
     mats.forEach(m => {
@@ -579,167 +586,14 @@ function mulberry32(seed) {
   };
 }
 
-/* ── 什器プリミティブ ── */
-function propCounter(g, x, z, accent) {
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, .9, .6), new THREE.MeshStandardMaterial({ color: 0xf2efe9, roughness: .3 }));
-  body.position.set(x, .45, z); g.add(body);
-  const top = new THREE.Mesh(new THREE.BoxGeometry(1.2, .28, .6), new THREE.MeshPhysicalMaterial({ color: 0xffffff, transmission: .7, roughness: .06, transparent: true, opacity: .45 }));
-  top.position.set(x, 1.03, z); g.add(top);
-  const glow = new THREE.Mesh(new THREE.BoxGeometry(1.08, .02, .48), new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: .5 }));
-  glow.position.set(x, .92, z); g.add(glow);
-  // 商品（小箱・ボトル）
-  for (let i = 0; i < 5; i++) {
-    const p = new THREE.Mesh(new THREE.BoxGeometry(.07, .1 + (i % 3) * .03, .07),
-      new THREE.MeshStandardMaterial({ color: [accent, 0xf0e6d6, 0x8a8078, 0xd9c9a8][i % 4], roughness: .4 }));
-    p.position.set(x - .45 + i * .22, 1.0, z); g.add(p);
-  }
-}
-function propRack(g, x, z, accent, rand) {
-  const railMat = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, metalness: .8, roughness: .3 });
-  [[-.6], [.6]].forEach(([dx]) => {
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(.02, .02, 1.5, 8), railMat);
-    post.position.set(x + dx, .75, z); g.add(post);
-  });
-  const bar = new THREE.Mesh(new THREE.CylinderGeometry(.016, .016, 1.24, 8), railMat);
-  bar.rotation.z = Math.PI / 2; bar.position.set(x, 1.48, z); g.add(bar);
-  const palette = [accent, 0xd9d0c2, 0x8a8078, 0x5c6068, 0xefe8da];
-  for (let i = 0; i < 7; i++) {
-    const c = new THREE.Mesh(new THREE.BoxGeometry(.15, .55 + rand() * .25, .05),
-      new THREE.MeshStandardMaterial({ color: palette[(rand() * palette.length) | 0], roughness: .85 }));
-    c.position.set(x - .5 + i * .165, 1.44 - (.55 + rand() * .1) / 2, z); g.add(c);
-  }
-}
-function propShelf(g, x, z, accent, rand) {
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.9, .06), new THREE.MeshStandardMaterial({ color: 0xb09a78, roughness: .7 }));
-  frame.position.set(x, .95, z - .17); g.add(frame);
-  const shelfMat = new THREE.MeshStandardMaterial({ color: 0xc0aa86, roughness: .65 });
-  const itemPal = [accent, 0xc8b89c, 0x8a8078, 0xe2d8c4, 0x6a7484];
-  for (let row = 0; row < 4; row++) {
-    const y = .28 + row * .5;
-    const sh = new THREE.Mesh(new THREE.BoxGeometry(1.4, .035, .36), shelfMat);
-    sh.position.set(x, y, z); g.add(sh);
-    for (let i = 0; i < 6; i++) {
-      if (rand() < .2) continue;
-      const it = new THREE.Mesh(new THREE.BoxGeometry(.15, .2 + rand() * .16, .2),
-        new THREE.MeshStandardMaterial({ color: itemPal[(rand() * itemPal.length) | 0], roughness: .85 }));
-      it.position.set(x - .58 + i * .23, y + .13 + .08, z); g.add(it);
-    }
-  }
-}
-function propDining(g, x, z, accent, warm) {
-  const table = new THREE.Mesh(new THREE.CylinderGeometry(.42, .42, .04, 20), new THREE.MeshStandardMaterial({ color: 0xe8e0d0, roughness: .5 }));
-  table.position.set(x, .74, z); g.add(table);
-  const leg = new THREE.Mesh(new THREE.CylinderGeometry(.04, .06, .74, 10), new THREE.MeshStandardMaterial({ color: 0x5a5048, metalness: .4, roughness: .4 }));
-  leg.position.set(x, .37, z); g.add(leg);
-  [[-.62, 0], [.62, 0], [0, -.62], [0, .62]].forEach(([dx, dz]) => {
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(.36, .07, .36), new THREE.MeshStandardMaterial({ color: accent, roughness: .8 }));
-    seat.position.set(x + dx, .46, z + dz); g.add(seat);
-    const sleg = new THREE.Mesh(new THREE.BoxGeometry(.05, .46, .05), new THREE.MeshStandardMaterial({ color: 0x4a4038 }));
-    sleg.position.set(x + dx, .23, z + dz); g.add(sleg);
-  });
-  const cord = new THREE.Mesh(new THREE.CylinderGeometry(.005, .005, 1.0, 6), new THREE.MeshStandardMaterial({ color: 0x333333 }));
-  cord.position.set(x, 2.5, z); g.add(cord);
-  const lamp = new THREE.Mesh(new THREE.SphereGeometry(.09, 14, 10), new THREE.MeshStandardMaterial({ color: warm, emissive: warm, emissiveIntensity: 2.2 }));
-  lamp.position.set(x, 1.95, z); g.add(lamp);
-}
-function propLiving(g, x, z, accent) {
-  const sofaMat = new THREE.MeshStandardMaterial({ color: accent, roughness: .85 });
-  const seat = new THREE.Mesh(new THREE.BoxGeometry(1.7, .38, .7), sofaMat); seat.position.set(x, .3, z); g.add(seat);
-  const backr = new THREE.Mesh(new THREE.BoxGeometry(1.7, .5, .18), sofaMat); backr.position.set(x, .64, z - .28); g.add(backr);
-  const lt = new THREE.Mesh(new THREE.BoxGeometry(.95, .07, .5), new THREE.MeshStandardMaterial({ color: 0x6a5644, roughness: .35 }));
-  lt.position.set(x, .24, z + .85); g.add(lt);
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(.018, .024, 1.5, 8), new THREE.MeshStandardMaterial({ color: 0x3a352e, metalness: .5, roughness: .4 }));
-  pole.position.set(x + 1.15, .75, z); g.add(pole);
-  const shade = new THREE.Mesh(new THREE.CylinderGeometry(.13, .17, .22, 14, 1, true),
-    new THREE.MeshStandardMaterial({ color: 0xf6ecd8, emissive: 0xffd9a0, emissiveIntensity: 1.8, side: THREE.DoubleSide }));
-  shade.position.set(x + 1.15, 1.56, z); g.add(shade);
-}
-function propBanner(g, x, z, accent, text) {
-  const b = new THREE.Mesh(new THREE.PlaneGeometry(.6, 1.1),
-    new THREE.MeshStandardMaterial({ color: accent, roughness: .8, side: THREE.DoubleSide }));
-  b.position.set(x, 2.2, z); g.add(b);
-  const stage = new THREE.Mesh(new THREE.BoxGeometry(2.6, .28, 1.4), new THREE.MeshStandardMaterial({ color: accent, roughness: .7 }));
-  stage.position.set(x, .14, z - .9); g.add(stage);
-}
-function propPlanter(g, x, z, rand) {
-  const pot = new THREE.Mesh(new THREE.BoxGeometry(.6, .44, .6), new THREE.MeshStandardMaterial({ color: 0x8a8078, roughness: .9 }));
-  pot.position.set(x, .22, z); g.add(pot);
-  const tall = rand() > .5;
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(.035, .05, tall ? 1.0 : .45, 8), new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: .9 }));
-  trunk.position.set(x, tall ? .92 : .64, z); g.add(trunk);
-  const leaf = new THREE.Mesh(tall ? new THREE.ConeGeometry(.36, .95, 10) : new THREE.SphereGeometry(.34, 10, 8),
-    new THREE.MeshStandardMaterial({ color: tall ? 0x3e6a3a : 0x4e8a44, roughness: .9 }));
-  leaf.position.set(x, tall ? 1.75 : 1.05, z); g.add(leaf);
-}
-function propBench(g, x, z) {
-  const seat = new THREE.Mesh(new THREE.BoxGeometry(1.5, .07, .42), new THREE.MeshStandardMaterial({ color: 0xa08a68, roughness: .8 }));
-  seat.position.set(x, .42, z); g.add(seat);
-  [[-.6], [.6]].forEach(([dx]) => {
-    const legb = new THREE.Mesh(new THREE.BoxGeometry(.08, .4, .38), new THREE.MeshStandardMaterial({ color: 0x55504a }));
-    legb.position.set(x + dx, .2, z); g.add(legb);
-  });
-}
-function propMannequin(g, x, z, color) {
-  const ped = new THREE.Mesh(new THREE.BoxGeometry(.4, .16, .4), new THREE.MeshStandardMaterial({ color: 0xe8e4dc, roughness: .6 }));
-  ped.position.set(x, .08, z); g.add(ped);
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(.12, .55, 6, 12), new THREE.MeshStandardMaterial({ color, roughness: .7 }));
-  body.position.set(x, .78, z); g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(.08, 12, 10), new THREE.MeshStandardMaterial({ color: 0xddd6ca, roughness: .5 }));
-  head.position.set(x, 1.3, z); g.add(head);
-}
-
-/* フロアごとの売場を構築（ドア正面の通路は空けておく） */
+/* フロアごとの売場を構築 — ボクセルワールド (voxel.js) が担当。
+   什器・人物・装飾はブロック造形になり、一人称モードで壊す/置くができる */
 function buildHallProps(floor, fzIn) {
   if (!hallPropsGroup) return;
   clearGroup(hallPropsGroup);
   const t = FLOOR_GUIDE[floor]; if (!t) return;
   const fz = fzIn ?? -dims.D / 2;
-  const g = hallPropsGroup;
-  const rand = mulberry32(floor * 7919 + 17);
-  const ac = t.accent;
-  const z = (v) => fz - v; // 乗場は -Z 方向へ広がる
-
-  switch (t.arch) {
-    case 'counters':
-      propCounter(g, -2.4, z(2.2), ac); propCounter(g, 2.4, z(2.2), ac);
-      propCounter(g, -2.4, z(4.6), ac); propCounter(g, 2.4, z(4.6), ac);
-      propCounter(g, 0, z(6.0), ac);
-      propMannequin(g, -4.0, z(3.4), ac); propMannequin(g, 4.0, z(3.4), 0xe8dcc8);
-      break;
-    case 'racks':
-      propRack(g, -2.6, z(2.2), ac, rand); propRack(g, 2.6, z(2.2), ac, rand);
-      propRack(g, -2.6, z(4.6), ac, rand); propRack(g, 2.6, z(4.6), ac, rand);
-      propMannequin(g, -1.0, z(5.9), ac); propMannequin(g, 1.0, z(5.9), 0xd9d0c2);
-      propCounter(g, 4.1, z(5.9), ac);
-      break;
-    case 'shelves':
-      propShelf(g, -2.8, z(2.4), ac, rand); propShelf(g, 2.8, z(2.4), ac, rand);
-      propShelf(g, -2.8, z(4.8), ac, rand); propShelf(g, 2.8, z(4.8), ac, rand);
-      propDining(g, 0, z(6.2), ac, 0xffe2b0); // カフェコーナー
-      break;
-    case 'tables':
-      propDining(g, -2.4, z(2.4), ac, t.light); propDining(g, 2.4, z(2.4), ac, t.light);
-      propDining(g, -2.4, z(5.0), ac, t.light); propDining(g, 2.4, z(5.0), ac, t.light);
-      propDining(g, 0, z(6.4), ac, t.light);
-      propPlanter(g, -4.2, z(1.4), rand); propPlanter(g, 4.2, z(1.4), rand);
-      break;
-    case 'plaza':
-      propBanner(g, -2.2, z(3.4), ac); propBanner(g, 0, z(3.6), ac); propBanner(g, 2.2, z(3.4), ac);
-      propMannequin(g, -1.0, z(4.6), 0xe8dcc8); propMannequin(g, 1.0, z(4.6), ac);
-      propCounter(g, -3.8, z(5.6), ac); propCounter(g, 3.8, z(5.6), ac);
-      break;
-    case 'living':
-      propLiving(g, -2.2, z(3.2), ac); propLiving(g, 2.4, z(5.2), 0x5c5248);
-      propCounter(g, 3.6, z(2.2), ac); // バーカウンター
-      propPlanter(g, -4.2, z(5.6), rand);
-      break;
-    case 'garden':
-      propPlanter(g, -2.6, z(2.0), rand); propPlanter(g, 2.6, z(2.2), rand);
-      propPlanter(g, -3.8, z(4.4), rand); propPlanter(g, 3.8, z(4.6), rand);
-      propPlanter(g, -1.2, z(6.2), rand); propPlanter(g, 1.4, z(6.4), rand);
-      propBench(g, 0, z(4.2)); propBench(g, -3.0, z(6.2));
-      break;
-  }
+  buildFloorVoxels(floor, hallPropsGroup, fz, t);
 }
 
 /* 到着階のフロアテーマを乗場に反映 */
@@ -752,6 +606,14 @@ function applyFloorTheme(floor, immediate) {
   cab.userData.hallInten = t.inten;
   drawSign(floor);
   buildHallProps(floor);
+  // 乗場シェルをフロアに合わせたドット絵テクスチャに切替
+  const shell = shellTexturesFor(floor);
+  if (m.floor.map !== shell.floorTex) {
+    m.floor.map = shell.floorTex; m.floor.map.repeat.set(20, 15); m.floor.needsUpdate = true;
+  }
+  if (m.wall.map !== shell.wallTex) {
+    m.wall.map = shell.wallTex; m.wall.map.repeat.set(20, 6); m.wall.needsUpdate = true;
+  }
   if (immediate) {
     m.wall.color.copy(wallC); m.floor.color.copy(floorC);
     hl.color.copy(lightC); hl2.color.copy(lightC);
@@ -1180,6 +1042,7 @@ function arrivalText(f) {
 }
 async function ride(target) {
   if (S.moving || target === S.curFloor) return;
+  if (S.view === 'walk') { toast('かごに戻ってから行先を選んでください'); return; }
   S.moving = true;
   S.pending = target;
   clearDepartTimer();
@@ -1252,22 +1115,32 @@ function armDepartTimer() {
     }
   }, 9000);
 }
+const hasPointerLock = 'pointerLockElement' in document;
 async function enterFloor() {
   if (S.moving) { toast('走行中です'); return; }
   if (S.view === 'walk') return;
   if (!S.doorsOpen) { cue('open', 'ドアが開きます', 'The doors are opening'); await doors(true, 1.2); }
   S.view = 'walk';
-  applyLimits('walk');
   cab.userData.hallGroup.visible = true;
   syncViewToggles(); updateFloorBtnLabel();
-  const p = viewPose('walk');
-  flyTo(p.pos, p.tgt, 1.8);
-  toast(`${S.curFloor}F ${FLOOR_GUIDE[S.curFloor]?.jp ?? ''} ─ ドラッグ+ホイールで売場を回遊できます`);
-  armDepartTimer();
+  if (hasPointerLock && !isTouchDevice()) {
+    // 一人称探索: 操作説明オーバーレイ → クリックでポインタロック開始
+    document.getElementById('fpTitle').textContent = `${S.curFloor}F ─ ${FLOOR_GUIDE[S.curFloor]?.jp ?? ''}`;
+    document.getElementById('fpOverlay').style.display = 'flex';
+  } else {
+    // フォールバック (タッチ端末): 従来のオービット回遊。タップで破壊できる
+    applyLimits('walk');
+    const p = viewPose('walk');
+    flyTo(p.pos, p.tgt, 1.8);
+    toast('タップでブロックをこわせます (一人称モードはPCで)');
+    armDepartTimer();
+  }
 }
+function isTouchDevice() { return matchMedia('(pointer: coarse)').matches; }
 async function returnToCab() {
   if (S.view !== 'walk') return;
   clearDepartTimer();
+  exitFPMode();
   if (!S.doorsOpen) {
     await hallCall();
   }
@@ -1305,20 +1178,26 @@ const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
 let downAt = 0, hovered = null;
 renderer.domElement.addEventListener('pointerdown', () => downAt = performance.now());
 renderer.domElement.addEventListener('pointerup', e => {
+  if (isFPActive()) return; // 一人称中は voxel.js が処理
   if (performance.now() - downAt > 240) return;
   ptr.x = (e.clientX / innerWidth) * 2 - 1; ptr.y = -(e.clientY / innerHeight) * 2 + 1;
   ray.setFromCamera(ptr, camera);
   const hit = ray.intersectObjects(btnHits, false)[0];
-  if (!hit) return;
-  const u = hit.object.userData;
-  btnBeep();
-  pressFX(u);
-  if (u.hallCall) { hallCall(); return; }
-  if (u.floor) { toast(`${u.floor}F を登録しました`); ride(u.floor); }
-  else if (u.label === 'open' && !S.moving) { cue('open', 'ドアが開きます', 'The doors are opening'); doors(true); }
-  else if (u.label === 'close' && !S.moving) { cue('close', 'ドアが閉まります。ご注意ください', 'The doors are closing'); doors(false); }
+  if (hit) {
+    const u = hit.object.userData;
+    btnBeep();
+    pressFX(u);
+    if (u.hallCall) { hallCall(); return; }
+    if (u.floor) { toast(`${u.floor}F を登録しました`); ride(u.floor); }
+    else if (u.label === 'open' && !S.moving) { cue('open', 'ドアが開きます', 'The doors are opening'); doors(true); }
+    else if (u.label === 'close' && !S.moving) { cue('close', 'ドアが閉まります。ご注意ください', 'The doors are closing'); doors(false); }
+    return;
+  }
+  // フォールバック回遊中: タップ/クリックでブロック破壊
+  if (S.view === 'walk') voxelPointerAction(ray, true);
 });
 renderer.domElement.addEventListener('pointermove', e => {
+  if (isFPActive()) return;
   ptr.x = (e.clientX / innerWidth) * 2 - 1; ptr.y = -(e.clientY / innerHeight) * 2 + 1;
   ray.setFromCamera(ptr, camera);
   const hit = ray.intersectObjects(btnHits, false)[0] || null;
@@ -1563,6 +1442,7 @@ $('#startBtn').onclick = () => {
 /* ホームへ戻る */
 $('#homeBtn').onclick = () => {
   clearDepartTimer();
+  exitFPMode();
   speechSynthesis?.cancel();
   if (clipAudio) clipAudio.pause();
   S.view = 'cab'; S.doorsOpen = true; S.pending = null;
@@ -1578,14 +1458,44 @@ $('#homeBtn').onclick = () => {
 };
 
 /* =====================================================================
-   ループ
+   ループ + ボクセル初期化
 ===================================================================== */
+initVoxel({
+  scene, camera, renderer, controls,
+  callbacks: {
+    audio,
+    toast,
+    isDoorsOpen: () => S.doorsOpen,
+    getDoorWidth: () => cab.userData.dw ?? .92,
+    getBtnHits: () => btnHits,
+    onHallCall: () => hallCall(),
+    onEnterCab: () => { returnToCab(); },
+  },
+});
+voxelTextures.forEach(t => KEEP_TEX.add(t));
+
+/* 一人称オーバーレイ */
+document.getElementById('fpResume').onclick = () => {
+  document.getElementById('fpOverlay').style.display = 'none';
+  if (isFPActive()) relockFP();
+  else enterFPMode();
+  armDepartTimer(); // 探索を始めてからエレベーターは出発する
+};
+document.getElementById('fpReturn').onclick = () => {
+  document.getElementById('fpOverlay').style.display = 'none';
+  returnToCab();
+};
+
+const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
-  controls.update();
+  const dt = Math.min(clock.getDelta(), .1);
+  if (!isFPActive()) controls.update();
   // 鏡: 後方(背面壁の外側)から見るときは非表示にして視認性を確保
   if (mirrorGroup) mirrorGroup.visible = camera.position.z < dims.D / 2 - 0.02;
+  updateVoxel(dt, S.view === 'walk', clock.elapsedTime);
   renderer.render(scene, camera);
 });
 buildCab();
 setHud(1, null);
 updateSpec(); refreshSwUI(); updateFloorBtnLabel();
+

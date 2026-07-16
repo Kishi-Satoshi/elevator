@@ -184,6 +184,30 @@ canvas{display:block;}
 /* ヒント・トースト */
 #hint{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:30;
   font-size:10px;letter-spacing:.26em;color:var(--sub);pointer-events:none;opacity:0;}
+
+/* ---------- ボクセル探索 (一人称) ---------- */
+#crosshair{display:none;position:fixed;left:50%;top:50%;width:18px;height:18px;
+  transform:translate(-50%,-50%);z-index:45;pointer-events:none;}
+#crosshair::before,#crosshair::after{content:"";position:absolute;background:rgba(255,255,255,.85);
+  mix-blend-mode:difference;}
+#crosshair::before{left:8px;top:0;width:2px;height:18px;}
+#crosshair::after{left:0;top:8px;width:18px;height:2px;}
+#hotbar{display:none;position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
+  z-index:45;gap:6px;}
+.hb-slot{width:56px;border:2px solid rgba(255,255,255,.3);background:rgba(10,12,15,.72);
+  padding:5px 4px 4px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;transition:.15s;}
+.hb-slot canvas{width:32px;height:32px;image-rendering:pixelated;}
+.hb-slot span{font-size:8px;color:var(--sub);letter-spacing:.02em;white-space:nowrap;}
+.hb-slot.active{border-color:#fff;background:rgba(30,34,40,.85);}
+.hb-slot.active span{color:var(--ink);}
+#fpOverlay{display:none;position:fixed;inset:0;z-index:58;background:rgba(5,6,8,.72);
+  backdrop-filter:blur(6px);align-items:center;justify-content:center;}
+#fpOverlay .box{text-align:center;max-width:520px;padding:30px;}
+#fpOverlay h3{font-family:Inter,sans-serif;font-weight:200;font-size:22px;letter-spacing:.24em;margin:0 0 14px;}
+#fpOverlay p{font-size:11px;color:var(--sub);letter-spacing:.08em;line-height:2;margin:0 0 24px;}
+#fpOverlay .keys{display:inline-block;text-align:left;}
+#fpOverlay .rowbtns{justify-content:center;display:flex;gap:10px;}
+#fpOverlay .ctl{min-width:150px;flex:none;}
 #toast{position:fixed;left:50%;top:70px;transform:translateX(-50%);z-index:50;background:var(--panel-solid);
   border:1px solid var(--hair);padding:10px 22px;font-size:11px;letter-spacing:.14em;opacity:0;pointer-events:none;}
 
@@ -226,6 +250,26 @@ canvas{display:block;}
 
 <div id="hint">ドラッグして、かご内を見回せます</div>
 <div id="toast"></div>
+
+<!-- ============ ボクセル探索 (一人称) ============ -->
+<div id="crosshair"></div>
+<div id="hotbar"></div>
+<div id="fpOverlay">
+  <div class="box">
+    <h3 id="fpTitle">FLOOR EXPLORER</h3>
+    <p>
+      <span class="keys">
+        W A S D ── 歩く ／ マウス ── 視点 ／ Space ── ジャンプ<br>
+        左クリック ── ブロック・人形をこわす ／ 右クリック ── ブロックをおく<br>
+        1〜8 ── ブロック選択 ／ 開いたドアへ歩くとかごに戻ります
+      </span>
+    </p>
+    <div class="rowbtns">
+      <button class="ctl" id="fpResume">フロアを探索する</button>
+      <button class="ctl" id="fpReturn">かごに戻る</button>
+    </div>
+  </div>
+</div>
 
 <!-- ============ 右パネル ============ -->
 <aside id="panel" style="opacity:0">
