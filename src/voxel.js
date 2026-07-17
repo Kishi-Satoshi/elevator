@@ -20,6 +20,7 @@ let fz = -0.75;
 
 /* ---------------- ドット絵テクスチャ (16x16 自作) ---------------- */
 export const voxelTextures = [];
+export const voxelTexSet = new Set(); // これに含まれるテクスチャは共有扱いで破棄しない
 const texCache = new Map();
 
 function px16(draw) {
@@ -33,6 +34,40 @@ function px16(draw) {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.generateMipmaps = false;
   voxelTextures.push(t);
+  voxelTexSet.add(t);
+  return t;
+}
+
+/* ボクセル人形の共有パレット */
+const P_SKIN = [0xe8c0a0, 0xdfae86, 0xc99a72, 0xf0d2b6];
+const P_HAIR = [0x241d18, 0x3c2e20, 0x554433, 0x6e6e6e, 0x151a20];
+const P_TOP = [0x39516e, 0x6e3b45, 0x5e664b, 0x8b8f96, 0xd9d5cc, 0x2c2f36, 0x8a6e4b, 0xc94a55, 0x4a7a58];
+const P_BOT = [0x2c2f38, 0x4a4438, 0x6b6f78, 0x3a3f4a, 0x8a8478];
+
+/* 顔テクスチャ: 少数のバリエーションを1度だけ生成してキャッシュ (再構築でリークしない) */
+const FACE_VARIANTS = 6;
+const faceCache = [];
+function faceTexV(idx) {
+  idx = ((idx % FACE_VARIANTS) + FACE_VARIANTS) % FACE_VARIANTS;
+  if (faceCache[idx]) return faceCache[idx];
+  const t = px16(g => {
+    g.clearRect(0, 0, 16, 16);
+    const eyeY = 6 + (idx % 2);
+    // 目 (白目 + 瞳)
+    g.fillStyle = '#f4f4f0'; g.fillRect(4, eyeY, 2, 2); g.fillRect(10, eyeY, 2, 2);
+    g.fillStyle = ['#3a2f28', '#2a3550', '#33302a'][idx % 3];
+    g.fillRect(5, eyeY, 1, 2); g.fillRect(10, eyeY, 1, 2);
+    // 眉
+    g.fillStyle = 'rgba(60,45,30,.6)'; g.fillRect(4, eyeY - 1, 2, 1); g.fillRect(10, eyeY - 1, 2, 1);
+    // 口
+    g.fillStyle = ['#a85a4e', '#8a4a42', '#b06a58'][idx % 3];
+    const mw = 3 + (idx % 3);
+    g.fillRect(8 - (mw >> 1), 11 + (idx % 2), mw, 1);
+    // 頬 (うっすら)
+    g.fillStyle = 'rgba(230,150,140,.28)';
+    g.fillRect(3, eyeY + 2, 2, 1); g.fillRect(11, eyeY + 2, 2, 1);
+  });
+  faceCache[idx] = t;
   return t;
 }
 function noiseFill(g, palette, rand) {
@@ -380,24 +415,21 @@ export function buildFloorVoxels(floor, parentGroup, doorZ, theme) {
 
 /* ---------------- ブロック人形 (オリジナルのボクセル人形) ---------------- */
 function voxPartMat(hex) { return new THREE.MeshLambertMaterial({ color: hex }); }
-function faceTex(rand) {
-  return px16(g => {
-    g.fillStyle = '#00000000'; g.clearRect(0, 0, 16, 16);
-    // 目
-    g.fillStyle = '#2a2a34';
-    g.fillRect(4, 6, 2, 2); g.fillRect(10, 6, 2, 2);
-    g.fillStyle = '#ffffff'; g.fillRect(4, 6, 1, 1); g.fillRect(10, 6, 1, 1);
-    // 口
-    g.fillStyle = rand() > .5 ? '#7a4038' : '#5a3a34';
-    g.fillRect(6, 11, 4, 1);
-  });
+
+/* 頭ブロック (顔テクスチャは -Z 面 = 正面) */
+function makeHead(size, skinHex, hairHex, faceIdx) {
+  const skinMat = voxPartMat(skinHex);
+  const face = new THREE.MeshLambertMaterial({ color: skinHex, map: faceTexV(faceIdx), transparent: true });
+  return new THREE.Mesh(new THREE.BoxGeometry(size, size, size),
+    [skinMat, skinMat, voxPartMat(hairHex), skinMat, skinMat, face]);
 }
+
 function makeVoxPerson(rand, accent) {
   const g = new THREE.Group();
-  const skinHex = [0xe8c0a0, 0xd9a97e, 0xc98f68][(rand() * 3) | 0];
-  const hairHex = [0x241d18, 0x3c2e20, 0x6e6e6e][(rand() * 3) | 0];
-  const topHex = rand() > .4 ? accent : [0x39516e, 0x5e664b, 0x8b8f96][(rand() * 3) | 0];
-  const botHex = [0x2c2f38, 0x4a4438, 0x6b6f78][(rand() * 3) | 0];
+  const skinHex = P_SKIN[(rand() * P_SKIN.length) | 0];
+  const hairHex = P_HAIR[(rand() * P_HAIR.length) | 0];
+  const topHex = rand() > .4 ? accent : P_TOP[(rand() * P_TOP.length) | 0];
+  const botHex = P_BOT[(rand() * P_BOT.length) | 0];
 
   const parts = [];
   const add = (w, h, d, x, y, z, matOrHex, extraMats) => {
@@ -412,11 +444,7 @@ function makeVoxPerson(rand, accent) {
   add(.34, .42, .2, 0, .59, 0, topHex);
   const armL = add(.1, .38, .1, -.235, .60, 0, topHex);
   const armR = add(.1, .38, .1, .235, .60, 0, topHex);
-  // 頭: 顔テクスチャは -Z 面 (正面)
-  const skinMat = voxPartMat(skinHex);
-  const face = new THREE.MeshLambertMaterial({ color: skinHex, map: faceTex(rand), transparent: true });
-  const head = new THREE.Mesh(new THREE.BoxGeometry(.3, .3, .3),
-    [skinMat, skinMat, voxPartMat(hairHex), skinMat, skinMat, face]);
+  const head = makeHead(.3, skinHex, hairHex, (rand() * FACE_VARIANTS) | 0);
   head.position.set(0, .97, 0); g.add(head); parts.push(head);
   const hairBand = add(.32, .1, .32, 0, 1.09, 0, hairHex);
   hairBand.position.y = 1.08;
@@ -428,6 +456,95 @@ function makeVoxPerson(rand, accent) {
     speed: .5 + rand() * .4,
     target: null, wait: 1 + rand() * 2,
   };
+}
+
+/* ─────────── かご内用ブロック人形 (静止・実寸プロポーション) ─────────── */
+/* Minecraft風の直方体体型。~1.7m。かご内で近くから見るので少しディテールを足す */
+export function makeBlockPerson(rand) {
+  const g = new THREE.Group();
+  const scale = 0.92 + rand() * 0.16;
+  const skinHex = P_SKIN[(rand() * P_SKIN.length) | 0];
+  const hairHex = P_HAIR[(rand() * P_HAIR.length) | 0];
+  const top = voxPartMat(P_TOP[(rand() * P_TOP.length) | 0]);
+  const bottom = voxPartMat(P_BOT[(rand() * P_BOT.length) | 0]);
+  const skin = voxPartMat(skinHex);
+  const hair = voxPartMat(hairHex);
+  const shoe = voxPartMat(0x26231f);
+
+  const box = (w, h, d, x, y, z, mat) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z); g.add(m); return m;
+  };
+  // 靴
+  box(.13, .07, .19, -.078, .035, .02, shoe);
+  box(.13, .07, .19, .078, .035, .02, shoe);
+  // 脚
+  box(.12, .68, .13, -.078, .41, 0, bottom);
+  box(.12, .68, .13, .078, .41, 0, bottom);
+  // 胴
+  box(.36, .5, .18, 0, 1.0, 0, top);
+  // 腕 (袖) + 手 (肌)
+  const armDrop = (rand() - .5) * .12;
+  [-1, 1].forEach(s => {
+    box(.11, .42, .12, s * .235, 1.03 + armDrop * s, 0, top);
+    box(.11, .1, .12, s * .235, .78 + armDrop * s, 0, skin);
+  });
+  // 首
+  box(.11, .06, .11, 0, 1.28, 0, skin);
+  // 頭
+  const head = makeHead(.28, skinHex, hairHex, (rand() * FACE_VARIANTS) | 0);
+  head.position.set(0, 1.45, 0); g.add(head);
+  // 髪 (頭頂・後ろ・前髪)
+  box(.3, .09, .3, 0, 1.605, 0, hair);
+  box(.3, .24, .07, 0, 1.47, .11, hair);           // 後ろ髪 (+Z)
+  if (rand() > .45) box(.3, .05, .04, 0, 1.55, -.145, hair); // 前髪 (-Z 上部)
+  // 一部の人はロングヘア
+  if (rand() > .6) box(.28, .18, .05, 0, 1.28, .12, hair);
+
+  g.scale.setScalar(scale);
+  g.userData.blockPerson = true;
+  return g;
+}
+
+/* かご内用ブロック車いす */
+export function makeBlockWheelchair(rand) {
+  const g = new THREE.Group();
+  const frame = voxPartMat(0x3a3f45);
+  const tyre = voxPartMat(0x1a1c1f);
+  const skinHex = P_SKIN[(rand() * P_SKIN.length) | 0];
+  const hairHex = P_HAIR[(rand() * P_HAIR.length) | 0];
+  const top = voxPartMat(P_TOP[(rand() * P_TOP.length) | 0]);
+  const bottom = voxPartMat(P_BOT[(rand() * P_BOT.length) | 0]);
+  const skin = voxPartMat(skinHex);
+  const hair = voxPartMat(hairHex);
+  const box = (w, h, d, x, y, z, mat) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z); g.add(m); return m;
+  };
+  // 車いす
+  box(.46, .08, .44, 0, .5, .04, frame);           // 座面
+  box(.46, .46, .08, 0, .74, .24, frame);          // 背もたれ
+  box(.06, .5, .06, -.2, .25, -.16, frame); box(.06, .5, .06, .2, .25, -.16, frame); // 前脚
+  [-1, 1].forEach(s => {
+    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(.3, .3, .05, 10), tyre);
+    wheel.rotation.z = Math.PI / 2; wheel.position.set(s * .27, .3, .06); g.add(wheel);
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(.06, .06, .07, 8), frame);
+    hub.rotation.z = Math.PI / 2; hub.position.set(s * .27, .3, .06); g.add(hub);
+    const caster = new THREE.Mesh(new THREE.CylinderGeometry(.08, .08, .05, 8), tyre);
+    caster.rotation.z = Math.PI / 2; caster.position.set(s * .2, .08, -.2); g.add(caster);
+  });
+  // 着座した人物
+  box(.34, .4, .18, 0, .92, .04, top);             // 胴
+  box(.11, .34, .12, -.235, .95, .04, top); box(.11, .34, .12, .235, .95, .04, top); // 腕
+  box(.13, .13, .34, -.09, .6, -.12, bottom); box(.13, .13, .34, .09, .6, -.12, bottom); // 太もも
+  box(.12, .34, .12, -.09, .42, -.28, bottom); box(.12, .34, .12, .09, .42, -.28, bottom); // すね
+  box(.11, .06, .11, 0, 1.18, .04, skin);          // 首
+  const head = makeHead(.28, skinHex, hairHex, (rand() * FACE_VARIANTS) | 0);
+  head.position.set(0, 1.35, .04); g.add(head);
+  box(.3, .09, .3, 0, 1.5, .04, hair);
+  box(.3, .24, .07, 0, 1.37, .15, hair);
+  g.userData.blockPerson = true;
+  return g;
 }
 function updatePeople(dt, t) {
   for (const p of peopleList) {

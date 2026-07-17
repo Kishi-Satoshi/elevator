@@ -5,7 +5,8 @@ import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
 import gsap from 'gsap';
 import {
   initVoxel, buildFloorVoxels, enterFPMode, exitFPMode, relockFP,
-  isFPActive, updateVoxel, voxelPointerAction, voxelTextures, shellTexturesFor,
+  isFPActive, updateVoxel, voxelPointerAction, voxelTextures, voxelTexSet,
+  shellTexturesFor, makeBlockPerson, makeBlockWheelchair,
 } from './voxel.js';
 
 /* =====================================================================
@@ -218,7 +219,7 @@ function disposeObject(root) {
     const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
     mats.forEach(m => {
       ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap', 'normalMap'].forEach(k => {
-        if (m[k] && !KEEP_TEX.has(m[k])) m[k].dispose();
+        if (m[k] && !KEEP_TEX.has(m[k]) && !voxelTexSet.has(m[k])) m[k].dispose();
       });
       m.dispose();
     });
@@ -626,96 +627,20 @@ function applyFloorTheme(floor, immediate) {
   [hl, hl2].forEach(l => gsap.to(l.color, { r: lightC.r, g: lightC.g, b: lightC.b, duration: d }));
 }
 
-/* ─────────── 人物モデル v2（肌・髪・衣服つき） ─────────── */
-const SKIN = [0xe8c0a0, 0xdfae86, 0xc99a72, 0xf0d2b6];
-const HAIR = [0x241d18, 0x3c2e20, 0x554433, 0x6e6e6e, 0x151a20];
-const TOPS = [0x39516e, 0x6e3b45, 0x5e664b, 0x8b8f96, 0xd9d5cc, 0x2c2f36, 0x8a6e4b];
-const BOTTOMS = [0x2c2f38, 0x4a4438, 0x6b6f78, 0x3a3f4a, 0x8a8478];
-
+/* ─────────── かご内の人物（マインクラフト風ブロック体型・voxel.js） ─────────── */
 let peopleGroup = null;
-function makePerson(rand) {
-  const g = new THREE.Group();
-  const h = 1.55 + rand() * .3;
-  const skin = new THREE.MeshStandardMaterial({ color: SKIN[(rand() * SKIN.length) | 0], roughness: .65 });
-  const hair = new THREE.MeshStandardMaterial({ color: HAIR[(rand() * HAIR.length) | 0], roughness: .8 });
-  const top = new THREE.MeshStandardMaterial({ color: TOPS[(rand() * TOPS.length) | 0], roughness: .8 });
-  const bottom = new THREE.MeshStandardMaterial({ color: BOTTOMS[(rand() * BOTTOMS.length) | 0], roughness: .85 });
-  const shoe = new THREE.MeshStandardMaterial({ color: 0x24211e, roughness: .5 });
-
-  // 靴
-  [-1, 1].forEach(s => {
-    const sh = new THREE.Mesh(new THREE.BoxGeometry(.09, .06, .2), shoe);
-    sh.position.set(s * .085, .03, .02); g.add(sh);
-  });
-  // 脚（ボトムス）
-  [-1, 1].forEach(s => {
-    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(.055, h * .38, 4, 10), bottom);
-    leg.position.set(s * .08, h * .28, 0); g.add(leg);
-  });
-  // 胴（トップス）
-  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(.13, h * .26, 6, 14), top);
-  torso.position.y = h * .62; g.add(torso);
-  // 腕（袖）+ 手（肌）
-  [-1, 1].forEach(s => {
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(.04, h * .24, 4, 10), top);
-    arm.position.set(s * .19, h * .6, 0); arm.rotation.z = s * .1; g.add(arm);
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(.035, 8, 8), skin);
-    hand.position.set(s * .21, h * .42, .01); g.add(hand);
-  });
-  // 首・頭・髪
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(.035, .04, .06, 10), skin);
-  neck.position.y = h - .17; g.add(neck);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(.084, 16, 14), skin);
-  head.position.y = h - .085; g.add(head);
-  const hairCap = new THREE.Mesh(new THREE.SphereGeometry(.088, 16, 12, 0, Math.PI * 2, 0, Math.PI * .55), hair);
-  hairCap.position.y = h - .078; hairCap.rotation.x = -.14; g.add(hairCap);
-  // ロングヘア風の後髪 (確率)
-  if (rand() > .5) {
-    const back = new THREE.Mesh(new THREE.CapsuleGeometry(.055, .14, 4, 8), hair);
-    back.position.set(0, h - .16, -.05); g.add(back);
-  }
-  g.rotation.y = (rand() - .5) * .5;
-  g.rotation.z = (rand() - .5) * .03;
-  return g;
-}
-function makeWheelchair(rand) {
-  const g = new THREE.Group();
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x44484e, roughness: .4, metalness: .6 });
-  const seat = new THREE.Mesh(new THREE.BoxGeometry(.44, .05, .42), frameMat); seat.position.y = .5; g.add(seat);
-  const back = new THREE.Mesh(new THREE.BoxGeometry(.44, .42, .05), frameMat); back.position.set(0, .73, .21); g.add(back);
-  [-1, 1].forEach(s => {
-    const wheel = new THREE.Mesh(new THREE.TorusGeometry(.3, .025, 10, 28), frameMat);
-    wheel.rotation.y = Math.PI / 2; wheel.position.set(s * .26, .3, .08); g.add(wheel);
-    const caster = new THREE.Mesh(new THREE.TorusGeometry(.08, .02, 8, 16), frameMat);
-    caster.rotation.y = Math.PI / 2; caster.position.set(s * .2, .08, -.22); g.add(caster);
-  });
-  const skin = new THREE.MeshStandardMaterial({ color: SKIN[(rand() * SKIN.length) | 0], roughness: .65 });
-  const top = new THREE.MeshStandardMaterial({ color: TOPS[(rand() * TOPS.length) | 0], roughness: .8 });
-  const bottom = new THREE.MeshStandardMaterial({ color: BOTTOMS[(rand() * BOTTOMS.length) | 0], roughness: .85 });
-  const hair = new THREE.MeshStandardMaterial({ color: HAIR[(rand() * HAIR.length) | 0], roughness: .8 });
-  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(.125, .4, 6, 14), top); torso.position.set(0, .86, .1); g.add(torso);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(.084, 16, 14), skin); head.position.set(0, 1.24, .1); g.add(head);
-  const hairCap = new THREE.Mesh(new THREE.SphereGeometry(.088, 16, 12, 0, Math.PI * 2, 0, Math.PI * .55), hair);
-  hairCap.position.set(0, 1.25, .1); g.add(hairCap);
-  [-1, 1].forEach(s => {
-    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(.05, .3, 4, 10), bottom);
-    thigh.rotation.x = Math.PI / 2; thigh.position.set(s * .08, .56, -.1); g.add(thigh);
-    const shin = new THREE.Mesh(new THREE.CapsuleGeometry(.045, .32, 4, 10), bottom);
-    shin.position.set(s * .08, .3, -.26); g.add(shin);
-  });
-  return g;
-}
 function buildPeople() {
   if (peopleGroup) { cab.remove(peopleGroup); disposeObject(peopleGroup); }
   peopleGroup = new THREE.Group(); cab.add(peopleGroup);
   if (S.people === 'none') return;
   const { W, D } = dims;
   const counts = { few: 2, half: Math.max(2, Math.round(S.cap / 2)), seven: Math.max(3, Math.round(S.cap * .7)), full: S.cap };
-  const rx = W / 2 - .32, rzF = -D / 2 + .42, rzB = D / 2 - .34;
+  const rx = W / 2 - .34, rzF = -D / 2 + .44, rzB = D / 2 - .36;
   const rand = mulberry32(S.cap * 131 + (S.people === 'wc' ? 7 : { few: 1, half: 2, seven: 3, full: 4 }[S.people] || 0));
+  // 顔がドア(-Z)側を向くよう rotation.y≈0 で配置
   if (S.people === 'wc') {
-    const wc = makeWheelchair(rand); wc.position.set(-W * .16, 0, -.05); wc.rotation.y = Math.PI; peopleGroup.add(wc);
-    const p = makePerson(rand); p.position.set(W * .26, 0, D * .22); p.rotation.y = Math.PI + .4; peopleGroup.add(p);
+    const wc = makeBlockWheelchair(rand); wc.position.set(-W * .16, 0, -.05); wc.rotation.y = .05; peopleGroup.add(wc);
+    const p = makeBlockPerson(rand); p.position.set(W * .26, 0, D * .18); p.rotation.y = -.5; peopleGroup.add(p);
     return;
   }
   const n = counts[S.people] || 0;
@@ -725,8 +650,8 @@ function buildPeople() {
     const fx = cols === 1 ? .5 : c / (cols - 1), fzr = rows === 1 ? .5 : r / (rows - 1);
     const x = -rx + fx * 2 * rx + (rand() - .5) * .1;
     const zz = rzF + fzr * (rzB - rzF) + (rand() - .5) * .08;
-    const p = makePerson(rand); p.position.set(x, 0, zz);
-    p.rotation.y = Math.PI + (rand() - .5) * .9;
+    const p = makeBlockPerson(rand); p.position.set(x, 0, zz);
+    p.rotation.y = (rand() - .5) * .7; // ほぼドア向き
     peopleGroup.add(p);
   }
 }
