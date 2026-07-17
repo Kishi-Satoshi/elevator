@@ -44,30 +44,33 @@ const P_HAIR = [0x241d18, 0x3c2e20, 0x554433, 0x6e6e6e, 0x151a20];
 const P_TOP = [0x39516e, 0x6e3b45, 0x5e664b, 0x8b8f96, 0xd9d5cc, 0x2c2f36, 0x8a6e4b, 0xc94a55, 0x4a7a58];
 const P_BOT = [0x2c2f38, 0x4a4438, 0x6b6f78, 0x3a3f4a, 0x8a8478];
 
-/* 顔テクスチャ: 少数のバリエーションを1度だけ生成してキャッシュ (再構築でリークしない) */
+/* 顔テクスチャ: 肌色×表情バリエーションを1度だけ生成してキャッシュ。
+   背景は不透明の肌色で塗り (透過させない → 頭が透けない)、その上に表情を描く。 */
 const FACE_VARIANTS = 6;
-const faceCache = [];
-function faceTexV(idx) {
+const faceCache = new Map();
+function faceTexV(skinHex, idx) {
   idx = ((idx % FACE_VARIANTS) + FACE_VARIANTS) % FACE_VARIANTS;
-  if (faceCache[idx]) return faceCache[idx];
+  const ck = skinHex + '_' + idx;
+  if (faceCache.has(ck)) return faceCache.get(ck);
+  const skinCss = '#' + new THREE.Color(skinHex).getHexString();
   const t = px16(g => {
-    g.clearRect(0, 0, 16, 16);
+    g.fillStyle = skinCss; g.fillRect(0, 0, 16, 16); // 不透明の肌色背景
     const eyeY = 6 + (idx % 2);
     // 目 (白目 + 瞳)
-    g.fillStyle = '#f4f4f0'; g.fillRect(4, eyeY, 2, 2); g.fillRect(10, eyeY, 2, 2);
+    g.fillStyle = '#f6f4ef'; g.fillRect(4, eyeY, 3, 2); g.fillRect(9, eyeY, 3, 2);
     g.fillStyle = ['#3a2f28', '#2a3550', '#33302a'][idx % 3];
-    g.fillRect(5, eyeY, 1, 2); g.fillRect(10, eyeY, 1, 2);
+    g.fillRect(5, eyeY, 2, 2); g.fillRect(10, eyeY, 2, 2);
     // 眉
-    g.fillStyle = 'rgba(60,45,30,.6)'; g.fillRect(4, eyeY - 1, 2, 1); g.fillRect(10, eyeY - 1, 2, 1);
+    g.fillStyle = 'rgba(60,45,30,.55)'; g.fillRect(4, eyeY - 2, 3, 1); g.fillRect(9, eyeY - 2, 3, 1);
     // 口
     g.fillStyle = ['#a85a4e', '#8a4a42', '#b06a58'][idx % 3];
     const mw = 3 + (idx % 3);
     g.fillRect(8 - (mw >> 1), 11 + (idx % 2), mw, 1);
     // 頬 (うっすら)
-    g.fillStyle = 'rgba(230,150,140,.28)';
-    g.fillRect(3, eyeY + 2, 2, 1); g.fillRect(11, eyeY + 2, 2, 1);
+    g.fillStyle = 'rgba(230,150,140,.3)';
+    g.fillRect(3, eyeY + 3, 2, 1); g.fillRect(11, eyeY + 3, 2, 1);
   });
-  faceCache[idx] = t;
+  faceCache.set(ck, t);
   return t;
 }
 function noiseFill(g, palette, rand) {
@@ -416,10 +419,10 @@ export function buildFloorVoxels(floor, parentGroup, doorZ, theme) {
 /* ---------------- ブロック人形 (オリジナルのボクセル人形) ---------------- */
 function voxPartMat(hex) { return new THREE.MeshLambertMaterial({ color: hex }); }
 
-/* 頭ブロック (顔テクスチャは -Z 面 = 正面) */
+/* 頭ブロック (顔テクスチャは -Z 面 = 正面)。顔は不透明の肌色ベースなので透過しない。 */
 function makeHead(size, skinHex, hairHex, faceIdx) {
   const skinMat = voxPartMat(skinHex);
-  const face = new THREE.MeshLambertMaterial({ color: skinHex, map: faceTexV(faceIdx), transparent: true });
+  const face = new THREE.MeshLambertMaterial({ map: faceTexV(skinHex, faceIdx) });
   return new THREE.Mesh(new THREE.BoxGeometry(size, size, size),
     [skinMat, skinMat, voxPartMat(hairHex), skinMat, skinMat, face]);
 }
