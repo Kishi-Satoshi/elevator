@@ -13,8 +13,8 @@ import gsap from 'gsap';
 ===================================================================== */
 
 const CELL = 0.5;
-const GRID_FIELD = { xMin: -16, xMax: 16, zMin: 0, zMax: 28, yMax: 8 };   // 各階の開けたフィールド
-const GRID_PLAINS = { xMin: -30, xMax: 30, zMin: 0, zMax: 46, yMax: 10 }; // 最上階の大草原
+const GRID_FIELD = { xMin: -16, xMax: 16, zMin: 0, zMax: 28, yMax: 8 };    // 各階の開けたフィールド
+const GRID_PLAINS = { xMin: -30, xMax: 30, zMin: 0, zMax: 46, yMax: 48 };  // 最上階の大草原(空まで積める高い上限)
 let GRID = GRID_FIELD;
 const PLAINS_FLOOR = 8;
 function isPlains(floor) { return floor === PLAINS_FLOOR; }
@@ -882,8 +882,8 @@ function updateMobs(dt, t) {
       }
     }
 
-    // 接地 + 挙動アニメ
-    const gh = groundHeightAt(pos.x, pos.z);
+    // 接地 + 挙動アニメ (モブは掘った穴に落ちないよう地表にクランプ)
+    const gh = Math.max(0, groundHeightAt(pos.x, pos.z));
     if (m.spec.behavior === 'hop') {
       m.vy -= 16 * dt;
       pos.y += m.vy * dt;
@@ -1586,6 +1586,21 @@ export function relockFP() {
   if (fp) ctx.renderer.domElement.requestPointerLock?.();
 }
 
+/* 掘り下りて下の階に落ちてくる (穴の真下・上空から着地) */
+export function dropInTop() {
+  ensureGroundPlane();
+  groundPlane.position.set(0, 0, fz - (GRID.zMax * CELL) / 2);
+  // 掘った位置 (x,z) の真上から落下。グリッド内にクランプ
+  const xLim = GRID.xMax * CELL - .3;
+  player.pos.x = Math.max(-xLim, Math.min(xLim, player.pos.x));
+  player.pos.z = Math.max(fz - GRID.zMax * CELL + .3, Math.min(fz - .5, player.pos.z));
+  player.pos.y = 3.0;
+  player.vel.set(0, 0, 0);
+  player.onGround = false;
+  player.invuln = 1.2;
+  ctx.camera.position.set(player.pos.x, player.pos.y + EYE, player.pos.z);
+}
+
 /* 衝突: 水平方向はセルAABBと円の押し出し、垂直は地面高さ。水は通り抜けられる */
 function solidAt(cx, cy, cz) { const b = world?.get(key(cx, cy, cz)); return !!b && b.type !== 'water'; }
 function collideAxis(pos, axis) {
@@ -1607,16 +1622,13 @@ function collideAxis(pos, axis) {
     }
   }
 }
+const VOID_Y = -50; // 掘り抜かれた縦穴 (支えが無い) → 落下できる
 function groundHeightAt(x, z) {
   const c = worldToCell(new THREE.Vector3(x, .1, z));
-  let h = 0;
   for (let y = GRID.yMax; y >= 0; y--) {
-    for (let dx = -0; dx <= 0; dx++) for (let dz = 0; dz <= 0; dz++) {
-      if (solidAt(c.x + dx, y, c.z + dz)) { h = Math.max(h, (y + 1) * CELL); }
-    }
-    if (h) break;
+    if (solidAt(c.x, y, c.z)) return (y + 1) * CELL;
   }
-  return h;
+  return VOID_Y; // 縦穴 (床まで掘り抜かれている)
 }
 
 export function updateVoxel(dt, walkMode, t) {
@@ -1688,7 +1700,11 @@ export function updateVoxel(dt, walkMode, t) {
   player.vel.y -= GRAV * dt;
   if ((keys.Space) && player.onGround) { player.vel.y = JUMP; player.onGround = false; }
   player.pos.y += player.vel.y * dt;
-  if (player.pos.y <= ground) { player.pos.y = ground; player.vel.y = 0; player.onGround = true; }
+  // 床を掘り抜いて落下 → 1階下のフロアへ (最下階は落ちない)
+  if (player.pos.y < -0.8) {
+    if (curFloor > 1 && ctx.callbacks.onDescend) { ctx.callbacks.onDescend(); return; }
+    player.pos.y = 0; player.vel.y = 0; player.onGround = true; // 1F は床が抜けない
+  } else if (player.pos.y <= ground) { player.pos.y = ground; player.vel.y = 0; player.onGround = true; }
   else player.onGround = false;
 
   // ヘッドボブ + 足音 (歩行リズムに同期)
