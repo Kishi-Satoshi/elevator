@@ -7,7 +7,7 @@ import {
   initVoxel, buildFloorVoxels, enterFPMode, exitFPMode, relockFP,
   isFPActive, updateVoxel, voxelPointerAction, voxelTextures, voxelTexSet,
   shellTexturesFor, makeBlockPerson, makeBlockWheelchair,
-  fieldSky, getDayInfo,
+  fieldSky, getDayInfo, setVoxelLight,
 } from './voxel.js';
 
 /* =====================================================================
@@ -127,6 +127,7 @@ stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x050608);
+scene.fog = new THREE.Fog(0x9ccdf0, 26, 78); // フィールドの奥行き感 (かご内には届かない距離)
 
 let envOK = false;
 try {
@@ -219,7 +220,7 @@ function disposeObject(root) {
     o.geometry?.dispose?.();
     const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
     mats.forEach(m => {
-      ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap', 'normalMap'].forEach(k => {
+      ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap', 'normalMap', 'bumpMap'].forEach(k => {
         if (m[k] && !KEEP_TEX.has(m[k]) && !voxelTexSet.has(m[k])) m[k].dispose();
       });
       m.dispose();
@@ -234,72 +235,102 @@ function clearGroup(g) {
 /* =====================================================================
    テクスチャ生成（手続き的：木目・ヘアライン・床・液晶・刻印・サイン）
 ===================================================================== */
+const MAX_ANISO = renderer.capabilities.getMaxAnisotropy?.() ?? 4;
 function canvasTex(w, h, draw) {
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   draw(c.getContext('2d'), w, h);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = MAX_ANISO; // 浅い角度でも滲まない (高解像度化)
   t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
 }
 function woodTex(base) {
   const b = new THREE.Color(base);
-  return canvasTex(256, 512, (g, w, h) => {
+  return canvasTex(512, 1024, (g, w, h) => {
     g.fillStyle = '#' + b.getHexString(); g.fillRect(0, 0, w, h);
-    for (let x = 0; x < w; x += 2) {
-      const v = Math.sin(x * .12) * 8 + Math.sin(x * .043) * 16;
-      const a = .05 + .05 * Math.abs(Math.sin(x * .3));
+    // 細かな木目 (1px単位のストローク + うねり)
+    for (let x = 0; x < w; x += 1) {
+      const v = Math.sin(x * .06) * 8 + Math.sin(x * .021) * 18;
+      const a = .04 + .045 * Math.abs(Math.sin(x * .15 + v * .05));
       g.fillStyle = `rgba(60,35,15,${a})`;
-      g.fillRect(x, 0, 1.4, h);
-      g.fillStyle = `rgba(255,240,220,${a * .5})`;
-      g.fillRect(x + 1 + v * .02, 0, .7, h);
+      g.fillRect(x, 0, 1, h);
+      if (x % 3 === 0) { g.fillStyle = `rgba(255,240,220,${a * .5})`; g.fillRect(x + 1, 0, .6, h); }
     }
-    for (let i = 0; i < 5; i++) {
+    // 節・板の陰影
+    for (let i = 0; i < 8; i++) {
       const y = Math.random() * h;
-      const grd = g.createLinearGradient(0, y - 40, 0, y + 40);
+      const grd = g.createLinearGradient(0, y - 60, 0, y + 60);
       grd.addColorStop(0, 'rgba(0,0,0,0)'); grd.addColorStop(.5, 'rgba(70,40,15,.10)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
-      g.fillStyle = grd; g.fillRect(0, y - 40, w, 80);
+      g.fillStyle = grd; g.fillRect(0, y - 60, w, 120);
     }
     g.fillStyle = 'rgba(40,22,8,.32)';
-    [w / 3, (w / 3) * 2].forEach(x => g.fillRect(x - 1, 0, 2, h));
+    [w / 3, (w / 3) * 2].forEach(x => g.fillRect(x - 1.5, 0, 3, h));
+    g.fillStyle = 'rgba(255,245,230,.1)';
+    [w / 3, (w / 3) * 2].forEach(x => g.fillRect(x + 1.8, 0, 1.2, h));
   });
 }
 function hairlineTex() {
-  return canvasTex(64, 256, (g, w, h) => {
+  return canvasTex(256, 1024, (g, w, h) => {
     g.fillStyle = '#c9ccd1'; g.fillRect(0, 0, w, h);
+    // ヘアライン: 1px毎に濃淡ゆらぎ + 時々深いスジ
     for (let y = 0; y < h; y++) {
       const v = Math.random() > .5 ? 255 : 30;
-      g.fillStyle = `rgba(${v},${v},${v},.055)`; g.fillRect(0, y, w, 1);
+      g.fillStyle = `rgba(${v},${v},${v},${.03 + Math.random() * .04})`;
+      g.fillRect(0, y, w, 1);
+      if (Math.random() < .015) {
+        g.fillStyle = 'rgba(20,22,26,.12)'; g.fillRect(0, y, w, 1);
+        g.fillStyle = 'rgba(255,255,255,.1)'; g.fillRect(0, y + 1, w, 1);
+      }
     }
   });
 }
 function steelTex(base) {
   const b = new THREE.Color(base);
-  return canvasTex(512, 512, (g, w, h) => {
+  return canvasTex(1024, 1024, (g, w, h) => {
     g.fillStyle = '#' + b.getHexString(); g.fillRect(0, 0, w, h);
     for (let x = 0; x < w; x += 1) {
       const v = Math.random() > .5 ? 255 : 0;
-      g.fillStyle = `rgba(${v},${v},${v},.018)`; g.fillRect(x, 0, 1, h);
+      g.fillStyle = `rgba(${v},${v},${v},${.012 + Math.random() * .012})`; g.fillRect(x, 0, 1, h);
     }
-    g.fillStyle = 'rgba(0,0,0,.22)';
-    [w / 3, (w / 3) * 2].forEach(x => g.fillRect(x - 1, 0, 2, h));
-    g.fillStyle = 'rgba(255,255,255,.07)';
-    [w / 3, (w / 3) * 2].forEach(x => g.fillRect(x + 1, 0, 1, h));
+    // パネル継ぎ目 (陰影つき)
+    g.fillStyle = 'rgba(0,0,0,.24)';
+    [w / 3, (w / 3) * 2].forEach(x => g.fillRect(x - 2, 0, 4, h));
+    g.fillStyle = 'rgba(255,255,255,.08)';
+    [w / 3, (w / 3) * 2].forEach(x => g.fillRect(x + 2, 0, 2, h));
   });
 }
 function tileTex(base) {
   const b = new THREE.Color(base);
-  return canvasTex(256, 256, (g, w, h) => {
+  const l = b.clone().multiplyScalar(1.06), d2 = b.clone().multiplyScalar(.92);
+  return canvasTex(512, 512, (g, w, h) => {
     g.fillStyle = '#' + b.getHexString(); g.fillRect(0, 0, w, h);
-    for (let i = 0; i < 2600; i++) {
-      g.fillStyle = `rgba(${Math.random() * 255 | 0},${Math.random() * 255 | 0},${Math.random() * 255 | 0},.035)`;
-      g.fillRect(Math.random() * w, Math.random() * h, 1.6, 1.6);
+    // 石目のまだら (2スケールのノイズ)
+    for (let i = 0; i < 9000; i++) {
+      const c = Math.random() > .5 ? l : d2;
+      g.fillStyle = `rgba(${c.r * 255 | 0},${c.g * 255 | 0},${c.b * 255 | 0},${.05 + Math.random() * .05})`;
+      g.fillRect(Math.random() * w, Math.random() * h, 1 + Math.random() * 2, 1 + Math.random() * 2);
     }
-    g.strokeStyle = 'rgba(0,0,0,.16)'; g.lineWidth = 2;
-    g.strokeRect(0, 0, w, h); g.beginPath(); g.moveTo(w / 2, 0); g.lineTo(w / 2, h); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
+    // かすかな大理石ヴェイン
+    g.strokeStyle = 'rgba(255,255,255,.05)'; g.lineWidth = 1.2;
+    for (let i = 0; i < 7; i++) {
+      g.beginPath();
+      let x = Math.random() * w, y = 0;
+      g.moveTo(x, y);
+      while (y < h) { x += (Math.random() - .5) * 46; y += 18 + Math.random() * 26; g.lineTo(x, y); }
+      g.stroke();
+    }
+    // 目地 (立体感のあるグルーヴ)
+    g.strokeStyle = 'rgba(0,0,0,.2)'; g.lineWidth = 3;
+    g.strokeRect(1.5, 1.5, w - 3, h - 3);
+    g.beginPath(); g.moveTo(w / 2, 0); g.lineTo(w / 2, h); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.07)'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(w / 2 + 2.5, 0); g.lineTo(w / 2 + 2.5, h); g.moveTo(0, h / 2 + 2.5); g.lineTo(w, h / 2 + 2.5); g.stroke();
   });
 }
 /* ボタン刻印（階数・開閉・上下矢印） */
 function btnLabelTex(label, dark) {
-  const t = canvasTex(128, 128, (g, w, h) => {
+  const t = canvasTex(256, 256, (g) => {
+    g.scale(2, 2); // 2倍解像度で精細な刻印に
+    const w = 128, h = 128;
     g.clearRect(0, 0, w, h);
     g.fillStyle = dark ? 'rgba(240,244,248,.92)' : 'rgba(28,30,34,.88)';
     g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -327,10 +358,12 @@ function btnLabelTex(label, dark) {
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
   return t;
 }
-/* 10.1型液晶 */
-const lcdCanvas = document.createElement('canvas'); lcdCanvas.width = 256; lcdCanvas.height = 420;
+/* 10.1型液晶 (2倍解像度で描画) */
+const lcdCanvas = document.createElement('canvas'); lcdCanvas.width = 512; lcdCanvas.height = 840;
 const lcdCtx = lcdCanvas.getContext('2d');
+lcdCtx.scale(2, 2);
 const lcdTex = new THREE.CanvasTexture(lcdCanvas); lcdTex.colorSpace = THREE.SRGBColorSpace;
+lcdTex.anisotropy = MAX_ANISO;
 KEEP_TEX.add(lcdTex);
 function drawLCD(floor, dir) {
   const g = lcdCtx, w = 256, h = 420;
@@ -356,9 +389,11 @@ function drawLCD(floor, dir) {
 drawLCD(1, null);
 
 /* ホールランタン（方向 + 階数） */
-const lantCanvas = document.createElement('canvas'); lantCanvas.width = 192; lantCanvas.height = 72;
+const lantCanvas = document.createElement('canvas'); lantCanvas.width = 384; lantCanvas.height = 144;
 const lantCtx = lantCanvas.getContext('2d');
+lantCtx.scale(2, 2);
 const lantTex = new THREE.CanvasTexture(lantCanvas); lantTex.colorSpace = THREE.SRGBColorSpace;
+lantTex.anisotropy = MAX_ANISO;
 KEEP_TEX.add(lantTex);
 function drawLantern(floor, dir) {
   const g = lantCtx, w = 192, h = 72;
@@ -376,9 +411,11 @@ function drawLantern(floor, dir) {
 drawLantern(1, null);
 
 /* フロアサイネージ（乗場の売場案内板） */
-const signCanvas = document.createElement('canvas'); signCanvas.width = 640; signCanvas.height = 200;
+const signCanvas = document.createElement('canvas'); signCanvas.width = 1280; signCanvas.height = 400;
 const signCtx = signCanvas.getContext('2d');
+signCtx.scale(2, 2);
 const signTex = new THREE.CanvasTexture(signCanvas); signTex.colorSpace = THREE.SRGBColorSpace;
+signTex.anisotropy = MAX_ANISO;
 KEEP_TEX.add(signTex);
 function drawSign(floor) {
   const t = FLOOR_GUIDE[floor]; if (!t) return;
@@ -410,14 +447,29 @@ let hallPropsGroup = null;
 function capScale() { return ({ 6: .96, 7: 1, 9: 1.1, 11: 1.2, 13: 1.3, 15: 1.38 })[S.cap] || 1.1; }
 
 function matFor(opt) {
-  if (opt.metal) return new THREE.MeshStandardMaterial({ map: hairlineTex(), color: opt.hex, metalness: .85, roughness: .34, envMapIntensity: envOK ? 1 : 0 });
-  if (opt.wood) return new THREE.MeshStandardMaterial({ map: woodTex(opt.hex), metalness: .05, roughness: .55 });
-  return new THREE.MeshStandardMaterial({ color: opt.hex, metalness: .12, roughness: .5 });
+  if (opt.metal) {
+    const t = hairlineTex();
+    return new THREE.MeshStandardMaterial({ map: t, color: opt.hex, metalness: .88, roughness: .28,
+      bumpMap: t, bumpScale: .0016, envMapIntensity: envOK ? 1.15 : 0 });
+  }
+  if (opt.wood) {
+    const t = woodTex(opt.hex);
+    return new THREE.MeshStandardMaterial({ map: t, metalness: .05, roughness: .5, bumpMap: t, bumpScale: .002 });
+  }
+  return new THREE.MeshStandardMaterial({ color: opt.hex, metalness: .12, roughness: .46 });
 }
 function wallMaterial(opt) {
-  if (opt.metal) return new THREE.MeshStandardMaterial({ map: hairlineTex(), color: opt.hex, metalness: .85, roughness: .34, envMapIntensity: envOK ? 1 : 0 });
-  if (opt.wood) return new THREE.MeshStandardMaterial({ map: woodTex(opt.hex), metalness: .05, roughness: .58 });
-  return new THREE.MeshStandardMaterial({ map: steelTex(opt.hex), metalness: .08, roughness: .74 });
+  if (opt.metal) {
+    const t = hairlineTex();
+    return new THREE.MeshStandardMaterial({ map: t, color: opt.hex, metalness: .88, roughness: .28,
+      bumpMap: t, bumpScale: .0016, envMapIntensity: envOK ? 1.15 : 0 });
+  }
+  if (opt.wood) {
+    const t = woodTex(opt.hex);
+    return new THREE.MeshStandardMaterial({ map: t, metalness: .05, roughness: .52, bumpMap: t, bumpScale: .002 });
+  }
+  const t = steelTex(opt.hex);
+  return new THREE.MeshStandardMaterial({ map: t, metalness: .1, roughness: .68, bumpMap: t, bumpScale: .0012 });
 }
 
 function buildCab() {
@@ -437,10 +489,15 @@ function buildCab() {
   M.door = matFor(doorOpt);
   M.frame = matFor(frameOpt);
   M.kickMat = matFor(kickOpt);
-  M.floor = new THREE.MeshStandardMaterial({ map: tileTex(floorOpt.hex), metalness: .06, roughness: .55 });
+  // 床: クリアコートで磨かれた石調 (本物のワックス床の写り込み)
+  const floorT = tileTex(floorOpt.hex);
+  M.floor = new THREE.MeshPhysicalMaterial({ map: floorT, metalness: .04, roughness: .42,
+    clearcoat: .6, clearcoatRoughness: .28, bumpMap: floorT, bumpScale: .0018, envMapIntensity: envOK ? .9 : 0 });
   M.floor.map.repeat.set(Math.round(W * 2.4), Math.round(D * 2.4));
   M.ceil = new THREE.MeshStandardMaterial({ color: 0xf2f3f4, metalness: .05, roughness: .9 });
-  M.sus = new THREE.MeshStandardMaterial({ map: hairlineTex(), color: 0xc9ccd1, metalness: .9, roughness: .3, envMapIntensity: envOK ? 1.1 : 0 });
+  const susT = hairlineTex();
+  M.sus = new THREE.MeshStandardMaterial({ map: susT, color: 0xc9ccd1, metalness: .92, roughness: .26,
+    bumpMap: susT, bumpScale: .0014, envMapIntensity: envOK ? 1.2 : 0 });
   M.dark = new THREE.MeshStandardMaterial({ color: 0x14161a, metalness: .4, roughness: .6 });
 
   const P = (w, h, mat) => new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
@@ -527,12 +584,25 @@ function buildHall(dw, dh, fz) {
     dsk.rotation.x = Math.PI / 2; dsk.position.set(x, h - .01, fz + z); hallGroup.add(dsk); roomParts.push(dsk);
   }
 
-  // 大草原の空・太陽 (最上階のみ表示)
+  // フィールドの空: 太陽・月・星・雲 (全フロアで表示)
   const plainsParts = [];
   const sun = new THREE.DirectionalLight(0xfff4e0, 2.2); sun.position.set(6, 16, fz - 8); hallGroup.add(sun); plainsParts.push(sun);
   const hemi = new THREE.HemisphereLight(0xbfe0ff, 0x4a6a3a, 1.15); hallGroup.add(hemi); plainsParts.push(hemi);
-  const sunDisk = new THREE.Mesh(new THREE.CircleGeometry(3.2, 24), new THREE.MeshBasicMaterial({ color: 0xfff6d8 }));
+  const sunDisk = new THREE.Mesh(new THREE.PlaneGeometry(5.4, 5.4), new THREE.MeshBasicMaterial({ color: 0xfff6d8, fog: false }));
   sunDisk.position.set(-14, 16, fz - 40); hallGroup.add(sunDisk); plainsParts.push(sunDisk);
+  const moonDisk = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 3.4), new THREE.MeshBasicMaterial({ color: 0xe8edf8, fog: false }));
+  moonDisk.position.set(14, 16, fz - 40); moonDisk.visible = false; hallGroup.add(moonDisk); plainsParts.push(moonDisk);
+  // 星空 (夜のみフェードイン)
+  const starGeo = new THREE.BufferGeometry();
+  const starPos = [];
+  const srand = mulberry32(9127);
+  for (let i = 0; i < 340; i++) {
+    const az = srand() * Math.PI * 2, el = srand() * Math.PI * .48 + .05, R = 55;
+    starPos.push(Math.cos(az) * Math.cos(el) * R, Math.sin(el) * R + 2, fz - 12 + Math.sin(az) * Math.cos(el) * R);
+  }
+  starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
+  const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: .22, transparent: true, opacity: 0, depthWrite: false, fog: false }));
+  hallGroup.add(stars); plainsParts.push(stars);
   // 遠景の雲 (板)
   const cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .82 });
   [[-8, 11, -30], [10, 13, -36], [0, 15, -42], [-16, 12, -22]].forEach(([cx, cy, cz]) => {
@@ -542,8 +612,10 @@ function buildHall(dw, dh, fz) {
 
   cab.userData.roomParts = roomParts;
   cab.userData.plainsParts = plainsParts;
-  cab.userData.sun = sun; cab.userData.hemi = hemi; cab.userData.sunDisk = sunDisk;
+  cab.userData.sun = sun; cab.userData.hemi = hemi;
+  cab.userData.sunDisk = sunDisk; cab.userData.moonDisk = moonDisk; cab.userData.stars = stars;
   cab.userData.baseSunI = 2.2; cab.userData.baseHemiI = 1.15;
+  cab.userData.hallFz = fz;
 
   // 乗場照明
   const hl = new THREE.PointLight(0xfff3df, 14, 12, 1.5); hl.position.set(0, h - .35, fz - 2.2); hallGroup.add(hl);
@@ -623,8 +695,10 @@ function applyFloorTheme(floor, immediate) {
   const baseSky = new THREE.Color(fieldSky(floor));
   cab.userData.baseSky = baseSky;
   scene.background = baseSky.clone();
+  scene.fog?.color.copy(baseSky);
   cab.userData.roomParts?.forEach(o => o.visible = false);
   cab.userData.plainsParts?.forEach(o => o.visible = true);
+  applyDayNight(); // 太陽/月/星の位置・明るさを現在時刻に同期
   drawSign(floor);
   buildHallProps(floor);
   // 乗場シェルをフロアに合わせたドット絵テクスチャに切替
@@ -647,23 +721,37 @@ function applyFloorTheme(floor, immediate) {
   [hl, hl2].forEach(l => gsap.to(l.color, { r: lightC.r, g: lightC.g, b: lightC.b, duration: d }));
 }
 
-/* 昼夜サイクルを空・太陽・照明・時刻HUDへ反映 */
-const NIGHT_SKY = new THREE.Color(0x0a1230);
+/* 昼夜サイクルを空・太陽軌道・月・星・フォグ・ブロック明度・時刻HUDへ反映 */
+const NIGHT_SKY = new THREE.Color(0x070d24);
+const DUSK_TINT = new THREE.Color(0xe8955a);
 function applyDayNight() {
   const info = getDayInfo();
   const base = cab.userData.baseSky || new THREE.Color(0x9ccdf0);
-  // 空: 昼のベース色 ↔ 夜の紺 (light: 1=昼, ~0.3=夜)
+  // 空: 昼のベース色 ↔ 夜の紺。夕暮れ/夜明けは橙をブレンド
   const lit = Math.max(0, Math.min(1, (info.light - 0.3) / 0.7));
   const sky = NIGHT_SKY.clone().lerp(base, lit);
+  const duskness = 1 - Math.abs(lit * 2 - 1); // 遷移帯で最大
+  sky.lerp(DUSK_TINT, duskness * .35);
   if (scene.background?.isColor) scene.background.copy(sky); else scene.background = sky.clone();
-  // 太陽・環境光の強度
-  const sun = cab.userData.sun, hemi = cab.userData.hemi, sunDisk = cab.userData.sunDisk;
-  if (sun) sun.intensity = cab.userData.baseSunI * info.light;
-  if (hemi) hemi.intensity = cab.userData.baseHemiI * (0.4 + info.light * 0.6);
-  if (sunDisk) {
-    sunDisk.material.color.setHex(info.night ? 0xf4f6ff : 0xfff6d8); // 夜は月
-    sunDisk.scale.setScalar(info.night ? 0.55 : 1);
+  if (scene.fog) scene.fog.color.copy(sky);
+  // 太陽の軌道 (東→天頂→西) と月 (夜の反対側)
+  const fzH = cab.userData.hallFz ?? -dims.D / 2;
+  const dayA = Math.max(0, Math.min(1, (info.phase - .12) / (.88 - .12))) * Math.PI;
+  const sun = cab.userData.sun, hemi = cab.userData.hemi;
+  const sunDisk = cab.userData.sunDisk, moonDisk = cab.userData.moonDisk, stars = cab.userData.stars;
+  const sx = Math.cos(dayA) * 34, sy = Math.max(1.5, Math.sin(dayA) * 26);
+  if (sunDisk) { sunDisk.position.set(sx, sy, fzH - 42); sunDisk.visible = !info.night; }
+  if (sun) { sun.position.set(sx * .5, Math.max(4, sy), fzH - 12); sun.intensity = cab.userData.baseSunI * info.light; }
+  if (hemi) hemi.intensity = cab.userData.baseHemiI * (0.35 + info.light * 0.65);
+  if (moonDisk) {
+    const na = ((info.phase + .5) % 1);
+    const ma = Math.max(0, Math.min(1, (na - .12) / (.88 - .12))) * Math.PI;
+    moonDisk.position.set(Math.cos(ma) * 30, Math.max(2, Math.sin(ma) * 22), fzH - 42);
+    moonDisk.visible = info.night;
   }
+  if (stars) stars.material.opacity = (1 - lit) * .95;
+  // ブロックのベイク明度 (チャンク全体を一括で暗く/明るく)
+  setVoxelLight(.32 + info.light * .68);
   // 時刻HUD
   const clk = document.getElementById('clockLabel');
   if (clk) clk.textContent = (info.night ? '🌙 ' : '☀️ ') + info.label;
@@ -823,7 +911,7 @@ function buildOptions() {
   if (S.handrail) {
     const r = .018, y = .86, railMat = M.sus;
     const mk = (len, x, z, rotY) => {
-      const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 16), railMat);
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 28), railMat);
       m.rotation.z = Math.PI / 2; m.rotation.y = rotY; m.position.set(x, y, z); optGroup.add(m);
     };
     mk(W * .86, 0, D / 2 - .06, 0);
@@ -831,7 +919,7 @@ function buildOptions() {
     mk(D * .8, W / 2 - .06, 0, Math.PI / 2);
     [[-W * .35, D / 2 - .06], [W * .35, D / 2 - .06], [-W / 2 + .06, -D * .28], [-W / 2 + .06, D * .28], [W / 2 - .06, -D * .28], [W / 2 - .06, D * .28]]
       .forEach(([x, z]) => {
-        const b = new THREE.Mesh(new THREE.CylinderGeometry(.008, .008, .05, 10), railMat);
+        const b = new THREE.Mesh(new THREE.CylinderGeometry(.008, .008, .05, 16), railMat);
         b.position.set(x, y - .028, z); optGroup.add(b);
       });
   }

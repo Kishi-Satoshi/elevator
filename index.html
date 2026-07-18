@@ -193,14 +193,20 @@ canvas{display:block;}
   mix-blend-mode:difference;}
 #crosshair::before{left:8px;top:0;width:2px;height:18px;}
 #crosshair::after{left:0;top:8px;width:18px;height:2px;}
-#hotbar{display:none;position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
-  z-index:45;gap:6px;}
-.hb-slot{width:56px;border:2px solid rgba(255,255,255,.3);background:rgba(10,12,15,.72);
-  padding:5px 4px 4px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;transition:.15s;}
-.hb-slot canvas{width:32px;height:32px;image-rendering:pixelated;}
-.hb-slot span{font-size:8px;color:var(--sub);letter-spacing:.02em;white-space:nowrap;}
-.hb-slot.active{border-color:#fff;background:rgba(30,34,40,.85);}
-.hb-slot.active span{color:var(--ink);}
+#hotbar{display:none;position:fixed;left:50%;bottom:14px;transform:translateX(-50%);
+  z-index:45;gap:0;background:rgba(12,12,14,.62);padding:3px;
+  border:2px solid rgba(20,20,22,.9);box-shadow:inset 0 0 0 2px rgba(150,150,155,.5), 0 3px 10px rgba(0,0,0,.5);}
+.hb-slot{position:relative;width:50px;height:50px;display:flex;align-items:center;justify-content:center;
+  cursor:pointer;box-shadow:inset 0 0 0 1px rgba(80,80,85,.65);}
+.hb-slot canvas{width:36px;height:36px;image-rendering:pixelated;
+  filter:drop-shadow(2px 3px 0 rgba(0,0,0,.4));}
+.hb-slot span{position:absolute;left:50%;bottom:58px;transform:translateX(-50%);display:none;
+  font-size:11px;color:#fff;letter-spacing:.06em;white-space:nowrap;text-shadow:1px 1px 0 #000;
+  background:rgba(10,10,12,.75);padding:3px 8px;border:1px solid rgba(255,255,255,.2);}
+.hb-slot::after{content:attr(data-num);position:absolute;left:4px;top:2px;font-size:9px;
+  color:rgba(255,255,255,.75);text-shadow:1px 1px 0 #000;}
+.hb-slot.active{box-shadow:inset 0 0 0 3px #fff, 0 0 0 2px rgba(255,255,255,.35);z-index:1;}
+.hb-slot.active span{display:block;}
 #fpOverlay{display:none;position:fixed;inset:0;z-index:58;background:rgba(5,6,8,.72);
   backdrop-filter:blur(6px);align-items:center;justify-content:center;}
 #fpOverlay .box{text-align:center;max-width:520px;padding:30px;}
@@ -303,12 +309,13 @@ canvas{display:block;}
     <p>
       <span class="keys">
         W A S D ── 歩く ／ マウス ── 視点 ／ Space ── ジャンプ（段差は自動でのぼる）<br>
-        左クリック ── こうげき（ブロック・敵をこわす）／ 右クリック ── ブロックをおく<br>
-        1〜8 ── ブロック選択 ／ B ── 拠点を保存 ／ 開いたドアへ歩くとかごに戻ります<br>
+        <b>W二連打</b> ── ダッシュ ／ <b>Shift</b> ── スニーク（端から落ちない）<br>
+        <b>左クリック長押し</b> ── 採掘（ひびが深くなり壊れる）／ 右クリック ── ブロック設置<br>
+        1〜8 / <b>ホイール</b> ── ブロック選択 ／ B ── 拠点を保存 ／ 開いたドアでかごへ帰還<br>
         <b style="color:#e0808a">敵に攻撃すると反撃されHP（ハート）が減ります。0になるとゲームオーバー。</b><br>
         たおした敵や葉からアイテムが手に入り、右下に集まります。<br>
-        <b style="color:#8fb4d6">昼夜がめぐり、夜になると敵が増えます。</b>
-        全フロアが各階の特徴を活かした開けたフィールド。編集した拠点はブラウザに保存されます。
+        <b style="color:#8fb4d6">昼夜がめぐり、夜は敵が増えます。</b>
+        全フロアが開けたフィールド。編集した拠点はブラウザに保存されます。
       </span>
     </p>
     <div class="rowbtns">

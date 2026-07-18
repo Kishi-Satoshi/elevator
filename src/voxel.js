@@ -194,6 +194,12 @@ const T = {
     noiseFill(g, ['#' + c.getHexString(), '#' + l.getHexString(), '#' + d.getHexString()], seeded(hex & 0xffff));
   })),
   water: () => tex('water', () => px16(g => noiseFill(g, ['#2f6bd0', '#3576dc', '#2a62c4', '#3e82e6'], seeded(121)))),
+  logTop: () => tex('logTop', () => px16(g => {
+    noiseFill(g, ['#8a6a42', '#7f6039', '#94724a'], seeded(63));
+    g.strokeStyle = 'rgba(70,45,20,.8)';
+    [2, 4.5, 7].forEach(r => { g.beginPath(); g.arc(8, 8, r, 0, Math.PI * 2); g.stroke(); });
+    g.fillStyle = '#5f4428'; g.fillRect(0, 0, 16, 1); g.fillRect(0, 15, 16, 1); g.fillRect(0, 0, 1, 16); g.fillRect(15, 0, 1, 16);
+  })),
   stonePath: () => tex('stonePath', () => px16(g => {
     noiseFill(g, ['#9a968e', '#908c84', '#a4a098'], seeded(131));
     g.fillStyle = 'rgba(0,0,0,.18)';
@@ -201,45 +207,145 @@ const T = {
   })),
 };
 
-/* ---------------- ブロックレジストリ ---------------- */
-const geoBox = new THREE.BoxGeometry(CELL, CELL, CELL);
-const matCache = new Map();
-function mat(id, opts) {
-  if (!matCache.has(id)) {
-    const m = new THREE.MeshLambertMaterial(opts);
-    matCache.set(id, m);
-  }
-  return matCache.get(id);
+/* ====================================================================
+   チャンクメッシュ描画系 — 本家ボクセルゲーム式
+   ------------------------------------------------------------
+   ブロックごとのメッシュではなく、露出している面だけを1枚の
+   BufferGeometry に統合する。頂点ごとにAO(環境遮蔽)と面方向の明暗を
+   焼き込み、テクスチャは1枚のアトラスにまとめる。
+   → 数千ブロックでも描画は数ドローコールで済み、見た目も
+     「角の落ち込んだ影」が出て本家のルックに近づく。
+==================================================================== */
+const ATLAS_COLS = 8, ATLAS_ROWS = 16, TILE_PX = 16;
+const atlasCanvas = document.createElement('canvas');
+atlasCanvas.width = ATLAS_COLS * TILE_PX; atlasCanvas.height = ATLAS_ROWS * TILE_PX;
+const atlasCtx = atlasCanvas.getContext('2d');
+const atlasTex = new THREE.CanvasTexture(atlasCanvas);
+atlasTex.colorSpace = THREE.SRGBColorSpace;
+atlasTex.magFilter = THREE.NearestFilter; atlasTex.minFilter = THREE.NearestFilter;
+atlasTex.generateMipmaps = false;
+voxelTexSet.add(atlasTex);
+const tileIds = new Map(); // texKey -> tile index
+function tileIdFor(texKey, texMaker) {
+  if (tileIds.has(texKey)) return tileIds.get(texKey);
+  const id = tileIds.size;
+  const tx = texMaker(); // CanvasTexture (16x16)
+  atlasCtx.clearRect((id % ATLAS_COLS) * TILE_PX, ((id / ATLAS_COLS) | 0) * TILE_PX, TILE_PX, TILE_PX);
+  atlasCtx.drawImage(tx.image, (id % ATLAS_COLS) * TILE_PX, ((id / ATLAS_COLS) | 0) * TILE_PX);
+  atlasTex.needsUpdate = true;
+  tileIds.set(texKey, id);
+  return id;
 }
-function blockMats(type) {
-  switch (type) {
-    case 'grass': {
-      const side = mat('grassSide', { map: T.grassSide() });
-      return [side, side, mat('grassTop', { map: T.grassTop() }), mat('dirt', { map: T.dirt() }), side, side];
-    }
-    case 'shelf': {
-      const side = mat('shelfSide', { map: T.shelf() });
-      const cap = mat('shelfCap', { map: T.planks() });
-      return [side, side, cap, cap, side, side];
-    }
-    case 'glass': return mat('glass', { map: T.glass(), transparent: true, side: THREE.DoubleSide });
-    case 'glow': return mat('glow', { map: T.glow(), emissive: 0xffc85e, emissiveMap: T.glow(), emissiveIntensity: 1.1 });
-    case 'stone': return mat('stone', { map: T.stone() });
-    case 'planks': return mat('planks', { map: T.planks() });
-    case 'log': return mat('log', { map: T.log() });
-    case 'leaves': return mat('leaves', { map: T.leaves() });
-    case 'brick': return mat('brick', { map: T.brick() });
-    case 'gold': return mat('gold', { map: T.gold() });
-    case 'quartz': return mat('quartz', { map: T.quartz() });
-    case 'water': return mat('water', { map: T.water(), transparent: true, opacity: .82 });
-    case 'stonePath': return mat('stonePath', { map: T.stonePath() });
-    case 'dirt': return mat('dirt', { map: T.dirt() });
-    default:
-      if (type.startsWith('wool:')) {
-        const hex = parseInt(type.slice(5), 16);
-        return mat(type, { map: T.wool(hex) });
+function uvRect(tile) {
+  const c = tile % ATLAS_COLS, r = (tile / ATLAS_COLS) | 0;
+  const e = 0.0015; // にじみ防止の微小インセット
+  return {
+    u0: c / ATLAS_COLS + e, u1: (c + 1) / ATLAS_COLS - e,
+    v0: 1 - (r + 1) / ATLAS_ROWS + e, v1: 1 - r / ATLAS_ROWS - e, // flipY: 上端が v1
+  };
+}
+/* ブロック種 → {top, side, bottom} のタイル */
+const tilesCache = new Map();
+function blockTilesFor(type) {
+  if (tilesCache.has(type)) return tilesCache.get(type);
+  let t;
+  if (type === 'grass') t = { top: tileIdFor('grassTop', T.grassTop), side: tileIdFor('grassSide', T.grassSide), bottom: tileIdFor('dirt', T.dirt) };
+  else if (type === 'log') t = { top: tileIdFor('logTop', T.logTop), side: tileIdFor('log', T.log), bottom: tileIdFor('logTop', T.logTop) };
+  else if (type === 'shelf') t = { top: tileIdFor('planks', T.planks), side: tileIdFor('shelf', T.shelf), bottom: tileIdFor('planks', T.planks) };
+  else if (type.startsWith('wool:')) { const id = tileIdFor(type, () => T.wool(parseInt(type.slice(5), 16))); t = { top: id, side: id, bottom: id }; }
+  else { const maker = T[type] || T.stone; const id = tileIdFor(type, maker); t = { top: id, side: id, bottom: id }; }
+  tilesCache.set(type, t);
+  return t;
+}
+
+const TRANS_TYPES = new Set(['glass', 'water']);
+function typeAt(cx, cy, cz) { const b = world?.get(key(cx, cy, cz)); return b ? b.type : null; }
+function occludes(t) { return !!t && !TRANS_TYPES.has(t); } // AO・面カリングの遮蔽判定
+
+/* 6面の定義: d=法線(world), t1/t2=接線, shade=本家風の面方向の明暗 */
+const FACES = [
+  { d: [1, 0, 0],  t1: [0, 0, -1], t2: [0, 1, 0], shade: .62, tile: 'side' },
+  { d: [-1, 0, 0], t1: [0, 0, 1],  t2: [0, 1, 0], shade: .62, tile: 'side' },
+  { d: [0, 1, 0],  t1: [1, 0, 0],  t2: [0, 0, -1], shade: 1.0, tile: 'top' },
+  { d: [0, -1, 0], t1: [1, 0, 0],  t2: [0, 0, 1], shade: .55, tile: 'bottom' },
+  { d: [0, 0, 1],  t1: [1, 0, 0],  t2: [0, 1, 0], shade: .82, tile: 'side' },
+  { d: [0, 0, -1], t1: [-1, 0, 0], t2: [0, 1, 0], shade: .82, tile: 'side' },
+];
+const AO_MULT = [0.42, 0.6, 0.78, 1.0];
+/* world方向オフセット→gridセル (grid z は world -z) */
+function occAt(cx, cy, cz, ox, oy, oz) { return occludes(typeAt(cx + ox, cy + oy, cz - oz)); }
+
+/* チャンクメッシュ (不透明 / 透過 / 発光=常時フルブライト) */
+const chunkMats = {
+  opaque: new THREE.MeshBasicMaterial({ map: atlasTex, vertexColors: true }),
+  trans: new THREE.MeshBasicMaterial({ map: atlasTex, vertexColors: true, transparent: true, opacity: .86, side: THREE.DoubleSide, depthWrite: false }),
+  glow: new THREE.MeshBasicMaterial({ map: atlasTex, vertexColors: true }),
+};
+const chunkMeshes = {};
+for (const k of ['opaque', 'trans', 'glow']) {
+  const m = new THREE.Mesh(new THREE.BufferGeometry(), chunkMats[k]);
+  m.userData.shared = true;
+  m.frustumCulled = false;
+  chunkMeshes[k] = m;
+}
+/* 昼夜の明るさをブロックへ反映 (glowは常に明るい) */
+export function setVoxelLight(f) {
+  chunkMats.opaque.color.setScalar(f);
+  chunkMats.trans.color.setScalar(Math.min(1, f * 1.05));
+}
+
+function rebuildChunk() {
+  const cols = { opaque: null, trans: null, glow: null };
+  for (const k in cols) cols[k] = { pos: [], col: [], uv: [], idx: [] };
+  const h = CELL / 2;
+  for (const [k, v] of world) {
+    const [cx, cy, cz] = k.split(',').map(Number);
+    const type = v.type;
+    const bucket = type === 'glow' ? 'glow' : TRANS_TYPES.has(type) ? 'trans' : 'opaque';
+    const tiles = blockTilesFor(type);
+    const center = cellToWorld(cx, cy, cz);
+    const fullBright = bucket === 'glow';
+    for (const F of FACES) {
+      const [dx, dy, dz] = F.d;
+      const nType = typeAt(cx + dx, cy + dy, cz - dz);
+      // 面カリング: 隣が不透明なら描かない。同種の透過同士(水-水/ガラス-ガラス)も描かない
+      if (occludes(nType)) continue;
+      if (nType && TRANS_TYPES.has(type) && nType === type) continue;
+      const c = cols[bucket];
+      const base = c.pos.length / 3;
+      const { u0, u1, v0, v1 } = uvRect(tiles[F.tile]);
+      const t1 = F.t1, t2 = F.t2;
+      const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+      const ao = [];
+      for (const [s1, s2] of corners) {
+        // 角のAO: 面の先の3近傍 (side1 / side2 / corner)
+        const a1 = occAt(cx, cy, cz, dx + t1[0] * s1, dy + t1[1] * s1, dz + t1[2] * s1);
+        const a2 = occAt(cx, cy, cz, dx + t2[0] * s2, dy + t2[1] * s2, dz + t2[2] * s2);
+        const ac = occAt(cx, cy, cz, dx + t1[0] * s1 + t2[0] * s2, dy + t1[1] * s1 + t2[1] * s2, dz + t1[2] * s1 + t2[2] * s2);
+        ao.push((a1 && a2) ? 0 : 3 - ((a1 ? 1 : 0) + (a2 ? 1 : 0) + (ac ? 1 : 0)));
+        const px = center.x + (dx + t1[0] * s1 + t2[0] * s2) * h;
+        const py = center.y + (dy + t1[1] * s1 + t2[1] * s2) * h;
+        const pz = center.z + (dz + t1[2] * s1 + t2[2] * s2) * h;
+        c.pos.push(px, py, pz);
+        c.uv.push(s1 < 0 ? u0 : u1, s2 < 0 ? v0 : v1);
       }
-      return mat('stone', { map: T.stone() });
+      for (let i = 0; i < 4; i++) {
+        const b = fullBright ? 1 : F.shade * AO_MULT[ao[i]];
+        c.col.push(b, b, b);
+      }
+      // AOの向きでクワッドの対角線を選ぶ (異方性アーティファクト防止)
+      if (ao[0] + ao[2] > ao[1] + ao[3]) c.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      else c.idx.push(base + 1, base + 2, base + 3, base + 1, base + 3, base);
+    }
+  }
+  for (const k in cols) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(cols[k].pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(cols[k].col, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(cols[k].uv, 2));
+    g.setIndex(cols[k].idx);
+    chunkMeshes[k].geometry.dispose();
+    chunkMeshes[k].geometry = g;
   }
 }
 const AVG_COLOR = {
@@ -269,7 +375,6 @@ let hotbarIdx = 0;
 /* floor -> Map("x,y,z" -> {type}) : セッション中は編集を保持 */
 const worldCache = new Map();
 let world = null;          // 現在フロアの Map
-let blockMeshes = new Map(); // key -> mesh
 let voxGroup = null;       // ブロック群 (hallPropsGroup 配下)
 let peopleList = [];       // ブロック人形
 let particles = [];
@@ -522,21 +627,11 @@ function generateFloor(floor, accentHex) {
 }
 
 /* ---------------- メッシュ構築 ---------------- */
-function addBlockMesh(x, y, z, type) {
-  const m = new THREE.Mesh(geoBox, blockMats(type));
-  m.position.copy(cellToWorld(x, y, z));
-  m.userData = { vox: true, shared: true, cell: { x, y, z }, type };
-  voxGroup.add(m);
-  blockMeshes.set(key(x, y, z), m);
-  return m;
-}
-
 export function buildFloorVoxels(floor, parentGroup, doorZ, theme) {
   fz = doorZ;
   curFloor = floor;
   GRID = isPlains(floor) ? GRID_PLAINS : GRID_FIELD;
   voxGroup = parentGroup;
-  blockMeshes = new Map();
   peopleList.forEach(p => p.group.parent?.remove(p.group));
   peopleList = [];
   clearItems();
@@ -544,10 +639,8 @@ export function buildFloorVoxels(floor, parentGroup, doorZ, theme) {
 
   if (!worldCache.has(floor)) worldCache.set(floor, generateFloor(floor, theme?.accent ?? 0x8888aa));
   world = worldCache.get(floor);
-  for (const [k, v] of world) {
-    const [x, y, z] = k.split(',').map(Number);
-    addBlockMesh(x, y, z, v.type);
-  }
+  voxGroup.add(chunkMeshes.opaque, chunkMeshes.trans, chunkMeshes.glow);
+  rebuildChunk();
 
   spawnFloorMobs(floor, theme?.accent ?? 0x8888aa);
 
@@ -858,11 +951,12 @@ function creeperExplode(m) {
   // ブロック破壊 (半径内)
   const cc = worldToCell(c);
   const R = 3;
+  let broke = false;
   for (let dx = -R; dx <= R; dx++) for (let dy = 0; dy <= R; dy++) for (let dz = -R; dz <= R; dz++) {
     if (dx * dx + dy * dy + dz * dz > R * R) continue;
-    const mesh = blockMeshes.get(key(cc.x + dx, dy, cc.z - dz));
-    if (mesh) { world.delete(key(cc.x + dx, dy, cc.z - dz)); blockMeshes.delete(key(cc.x + dx, dy, cc.z - dz)); voxGroup.remove(mesh); }
+    if (world.delete(key(cc.x + dx, dy, cc.z - dz))) broke = true;
   }
+  if (broke) rebuildChunk();
   markDirty(curFloor);
   dropItem(c.clone(), 'gem');
   // プレイヤーへ範囲ダメージ
@@ -1193,47 +1287,52 @@ function boomSound() {
   o.connect(og).connect(a.destination); o.start(t); o.stop(t + .5);
 }
 
-function breakBlockAt(mesh) {
-  const { cell, type } = mesh.userData;
-  world.delete(key(cell.x, cell.y, cell.z));
-  blockMeshes.delete(key(cell.x, cell.y, cell.z));
-  voxGroup.remove(mesh); // 共有ジオメトリ/マテリアルなので dispose しない
-  spawnParticles(mesh.position, avgColor(type), 10);
+function breakBlockCell(cx, cy, cz) {
+  const type = typeAt(cx, cy, cz);
+  if (!type) return;
+  world.delete(key(cx, cy, cz));
+  rebuildChunk();
+  const wp = cellToWorld(cx, cy, cz);
+  spawnParticles(wp, avgColor(type), 12);
   popSound(1);
   navigator.vibrate?.(12);
-  // 葉 → りんご / 金鉱脈 → コイン (マイクラ風ドロップ)
-  if (type === 'leaves' && Math.random() < .28) dropItem(mesh.position.clone(), 'apple');
-  else if (type === 'gold' && Math.random() < .6) dropItem(mesh.position.clone(), 'coin');
+  // 葉 → りんご / 金鉱脈 → コイン (ドロップ)
+  if (type === 'leaves' && Math.random() < .28) dropItem(wp.clone(), 'apple');
+  else if (type === 'gold' && Math.random() < .6) dropItem(wp.clone(), 'coin');
   markDirty(curFloor);
 }
-function placeBlockAt(targetMesh, faceNormal) {
-  const c = targetMesh.userData.cell;
-  const n = faceNormal;
-  const nx = c.x + Math.round(n.x);
-  const ny = c.y + Math.round(n.y);
-  const nz = c.z - Math.round(n.z); // grid z は -Z 方向
-  if (!inGrid(nx, ny, nz) || world.has(key(nx, ny, nz))) return;
+function placeBlockCell(cx, cy, cz) {
+  if (!inGrid(cx, cy, cz) || world.has(key(cx, cy, cz))) return false;
   // プレイヤーと重なる位置には置けない
-  const wp = cellToWorld(nx, ny, nz);
+  const wp = cellToWorld(cx, cy, cz);
   const cam = ctx.camera.position;
-  if (Math.abs(wp.x - cam.x) < .55 && Math.abs(wp.z - cam.z) < .55 && wp.y > cam.y - 1.8 && wp.y < cam.y + .4) return;
+  if (Math.abs(wp.x - cam.x) < .55 && Math.abs(wp.z - cam.z) < .55 && wp.y > cam.y - 1.8 && wp.y < cam.y + .4) return false;
   const type = HOTBAR[hotbarIdx].type;
-  world.set(key(nx, ny, nz), { type });
-  const m = addBlockMesh(nx, ny, nz, type);
-  gsap.fromTo(m.scale, { x: .6, y: .6, z: .6 }, { x: 1, y: 1, z: 1, duration: .16, ease: 'back.out(2)' });
+  world.set(key(cx, cy, cz), { type });
+  rebuildChunk();
   placeSound();
+  swingHand();
   markDirty(curFloor);
+  return true;
+}
+/* 照準先のブロックを取得 (チャンクへのレイキャスト) */
+function raycastBlock() {
+  centerRay.setFromCamera(ORIGIN2, ctx.camera);
+  const targets = [chunkMeshes.opaque, chunkMeshes.glow, chunkMeshes.trans].filter(m => m.parent);
+  const h = centerRay.intersectObjects(targets, false)[0];
+  if (!h?.face) return null;
+  const n = h.face.normal, p = h.point;
+  const cell = worldToCell(new THREE.Vector3(p.x - n.x * .03, p.y - n.y * .03, p.z - n.z * .03));
+  if (!world.has(key(cell.x, cell.y, cell.z))) return null;
+  return {
+    cell, type: typeAt(cell.x, cell.y, cell.z), point: p,
+    place: { x: cell.x + Math.round(n.x), y: cell.y + Math.round(n.y), z: cell.z - Math.round(n.z) },
+  };
 }
 /* 床(地面)への設置: 空セルへの直接設置 (地面レイ) */
 function placeOnGround(point) {
   const c = worldToCell(new THREE.Vector3(point.x, .01, point.z));
-  if (!inGrid(c.x, 0, c.z) || world.has(key(c.x, 0, c.z))) return;
-  const type = HOTBAR[hotbarIdx].type;
-  world.set(key(c.x, 0, c.z), { type });
-  const m = addBlockMesh(c.x, 0, c.z, type);
-  gsap.fromTo(m.scale, { x: .6, y: .6, z: .6 }, { x: 1, y: 1, z: 1, duration: .16, ease: 'back.out(2)' });
-  placeSound();
-  markDirty(curFloor);
+  placeBlockCell(c.x, 0, c.z);
 }
 
 /* ---------------- 一人称コントローラ ---------------- */
@@ -1241,12 +1340,101 @@ let fp = false;
 let locked = false;
 const keys = {};
 const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), onGround: true, hp: 20, maxHp: 20, invuln: 0, dead: false };
-const EYE = 1.62, RADIUS = .22, GRAV = 20, JUMP = 5.4, SPEED = 3.4;
+const EYE = 1.62, RADIUS = .22, GRAV = 20, JUMP = 5.4, SPEED = 3.6;
 let savedFov = 66;
 const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const centerRay = new THREE.Raycaster();
-centerRay.far = 4;
+centerRay.far = 4.5;
+const ORIGIN2 = new THREE.Vector2(0, 0);
 let groundPlane = null;
+
+/* 移動フィール: スプリント / スニーク / ヘッドボブ */
+let sprinting = false, lastTapW = 0;
+let bobT = 0, bobPrevSin = 0;
+const isSneak = () => !!(keys.ShiftLeft || keys.ShiftRight);
+
+/* 採掘 (長押しでゲージが進み、ひび割れが深くなる) */
+let miningCell = null, miningProgress = 0, holdBreak = false, holdPlace = false, placeCd = 0;
+function hardness(type) {
+  if (!type) return .6;
+  if (type.startsWith('wool:')) return .4;
+  return ({ glass: .18, water: .2, leaves: .3, glow: .35, dirt: .4, grass: .45, shelf: .5,
+            planks: .55, log: .6, gold: .65, quartz: .7, stone: .8, stonePath: .8, brick: .85 })[type] ?? .6;
+}
+/* ひび割れテクスチャ (5段階・自作) */
+const crackTex = [];
+function ensureCrackTex() {
+  if (crackTex.length) return;
+  for (let s = 0; s < 5; s++) {
+    crackTex.push(px16(g => {
+      g.clearRect(0, 0, 16, 16);
+      g.strokeStyle = 'rgba(20,16,12,.85)'; g.lineWidth = 1;
+      const r = seeded(400 + s * 7);
+      const n = 3 + s * 3;
+      for (let i = 0; i < n; i++) {
+        let x = 8 + (r() - .5) * 4, y = 8 + (r() - .5) * 4;
+        g.beginPath(); g.moveTo(x, y);
+        const segs = 2 + ((r() * 3) | 0);
+        for (let sgm = 0; sgm < segs; sgm++) {
+          x += (r() - .5) * 9; y += (r() - .5) * 9;
+          g.lineTo(Math.max(0, Math.min(16, x)), Math.max(0, Math.min(16, y)));
+        }
+        g.stroke();
+      }
+    }));
+  }
+}
+let crackMesh = null;
+function ensureCrackMesh() {
+  if (crackMesh) return;
+  ensureCrackTex();
+  crackMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(CELL * 1.004, CELL * 1.004, CELL * 1.004),
+    new THREE.MeshBasicMaterial({ map: crackTex[0], transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 })
+  );
+  crackMesh.userData.shared = true;
+  crackMesh.visible = false;
+  ctx.scene.add(crackMesh);
+}
+
+/* 手持ちブロック (画面右下・本家の一人称の手) */
+let handGroup = null, handMesh = null, handBaseY = -.34;
+function ensureHand() {
+  if (handGroup) return;
+  handGroup = new THREE.Group();
+  handGroup.position.set(.34, handBaseY, -.55);
+  handGroup.rotation.set(.18, -.5, .08);
+  ctx.camera.add(handGroup);
+  ctx.scene.add(ctx.camera); // カメラ子要素を描画するためシーンへ
+  refreshHand();
+}
+function refreshHand() {
+  if (!handGroup) return;
+  if (handMesh) { handGroup.remove(handMesh); handMesh.geometry.dispose(); }
+  const type = HOTBAR[hotbarIdx].type;
+  const tiles = blockTilesFor(type);
+  // 面ごとにアトラスの該当タイルへUVを合わせた小さなキューブ
+  const g = new THREE.BoxGeometry(.16, .16, .16);
+  const uv = g.getAttribute('uv');
+  // BoxGeometry の面順: +x,-x,+y,-y,+z,-z (各4頂点)
+  const faceTiles = [tiles.side, tiles.side, tiles.top, tiles.bottom, tiles.side, tiles.side];
+  for (let f = 0; f < 6; f++) {
+    const rct = uvRect(faceTiles[f]);
+    for (let vv = 0; vv < 4; vv++) {
+      const i = f * 4 + vv;
+      uv.setXY(i, uv.getX(i) < .5 ? rct.u0 : rct.u1, uv.getY(i) < .5 ? rct.v0 : rct.v1);
+    }
+  }
+  // 面の明暗 (上明・横中・下暗) はグループを傾けているので単色でも立体感が出る
+  handMesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: atlasTex, transparent: true }));
+  handMesh.userData.shared = true;
+  handGroup.add(handMesh);
+}
+function swingHand() {
+  if (!handGroup) return;
+  gsap.killTweensOf(handGroup.rotation);
+  gsap.fromTo(handGroup.rotation, { x: .18 }, { x: -.55, duration: .085, yoyo: true, repeat: 1, ease: 'power2.out', onComplete: () => handGroup.rotation.x = .18 });
+}
 
 export function isFPActive() { return fp; }
 
@@ -1279,38 +1467,53 @@ export function initVoxel(context) {
     keys[e.code] = true;
     if (e.code === 'Space') e.preventDefault();
     if (e.code === 'KeyB') { saveBaseManual(); return; } // 拠点を保存
+    // W二連打 or Ctrl+W でスプリント (本家準拠)
+    if (e.code === 'KeyW' && !e.repeat) {
+      const now = performance.now();
+      if (now - lastTapW < 280) sprinting = true;
+      lastTapW = now;
+    }
+    if ((e.code === 'ControlLeft' || e.code === 'ControlRight') && keys.KeyW) sprinting = true;
     const num = parseInt(e.key, 10);
     if (num >= 1 && num <= HOTBAR.length) selectHotbar(num - 1);
   });
-  document.addEventListener('keyup', e => { keys[e.code] = false; });
+  document.addEventListener('keyup', e => {
+    keys[e.code] = false;
+    if (e.code === 'KeyW') sprinting = false;
+  });
+  // ホイールでホットバー切替 (本家と同じ)
+  dom.addEventListener('wheel', e => {
+    if (!fp || !locked) return;
+    e.preventDefault();
+    selectHotbar((hotbarIdx + (e.deltaY > 0 ? 1 : HOTBAR.length - 1)) % HOTBAR.length);
+  }, { passive: false });
 
   dom.addEventListener('pointerdown', e => {
     if (!fp || !locked) return;
     e.preventDefault();
-    centerRay.setFromCamera(new THREE.Vector2(0, 0), ctx.camera);
-    // 乗場の呼びボタン
-    const callHit = centerRay.intersectObjects(ctx.callbacks.getBtnHits(), false)[0];
-    if (callHit?.object.userData.hallCall && e.button === 0) { ctx.callbacks.onHallCall(); return; }
-    // モブ (攻撃)
-    const personMeshes = peopleList.flatMap(p => p.parts);
-    const ph = centerRay.intersectObjects(personMeshes, false)[0];
-    if (ph && e.button === 0) {
-      const p = peopleList.find(q => q.parts.includes(ph.object));
-      if (p) { hitMob(p); return; }
-    }
-    // ブロック
-    const bh = centerRay.intersectObjects([...blockMeshes.values()], false)[0];
-    if (bh) {
-      if (e.button === 0) breakBlockAt(bh.object);
-      else if (e.button === 2) placeBlockAt(bh.object, bh.face.normal.clone().transformDirection(bh.object.matrixWorld));
-      return;
-    }
-    // 地面へ設置
-    if (e.button === 2 && groundPlane) {
-      const gh = centerRay.intersectObject(groundPlane, false)[0];
-      if (gh) placeOnGround(gh.point);
+    centerRay.setFromCamera(ORIGIN2, ctx.camera);
+    if (e.button === 0) {
+      // 乗場の呼びボタン
+      const callHit = centerRay.intersectObjects(ctx.callbacks.getBtnHits(), false)[0];
+      if (callHit?.object.userData.hallCall) { ctx.callbacks.onHallCall(); swingHand(); return; }
+      // モブ (攻撃)
+      const personMeshes = peopleList.flatMap(p => p.parts);
+      const ph = centerRay.intersectObjects(personMeshes, false)[0];
+      if (ph) {
+        const p = peopleList.find(q => q.parts.includes(ph.object));
+        if (p) { hitMob(p); swingHand(); return; }
+      }
+      // ブロック: 長押し採掘の開始 (updateVoxel でゲージが進む)
+      holdBreak = true;
+      miningCell = null; miningProgress = 0;
+      swingHand();
+    } else if (e.button === 2) {
+      holdPlace = true; placeCd = 0; // 即時に1回 + 押しっぱなしで0.25s間隔
     }
   });
+  const stopHold = () => { holdBreak = false; holdPlace = false; miningCell = null; miningProgress = 0; if (crackMesh) crackMesh.visible = false; };
+  dom.addEventListener('pointerup', stopHold);
+  document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== dom) stopHold(); });
 
   buildHotbarUI();
   loadSavedWorld();     // 保存済み拠点を復元
@@ -1337,6 +1540,8 @@ export function enterFPMode() {
   gsap.killTweensOf(ctx.controls.target);
   ensureGroundPlane();
   groundPlane.position.set(0, 0, fz - (GRID.zMax * CELL) / 2);
+  ensureHand(); ensureCrackMesh();
+  handGroup.visible = true;
   ctx.controls.enabled = false;
   savedFov = ctx.camera.fov;
   ctx.camera.fov = 75; ctx.camera.updateProjectionMatrix();
@@ -1372,13 +1577,17 @@ export function exitFPMode() {
   const clk = document.getElementById('clock'); if (clk) clk.style.display = 'none';
   player.dead = false;
   if (highlight) highlight.visible = false;
+  if (handGroup) handGroup.visible = false;
+  if (crackMesh) crackMesh.visible = false;
+  holdBreak = holdPlace = false; miningCell = null; miningProgress = 0;
+  sprinting = false;
 }
 export function relockFP() {
   if (fp) ctx.renderer.domElement.requestPointerLock?.();
 }
 
-/* 衝突: 水平方向はセルAABBと円の押し出し、垂直は地面高さ */
-function solidAt(cx, cy, cz) { return world?.has(key(cx, cy, cz)); }
+/* 衝突: 水平方向はセルAABBと円の押し出し、垂直は地面高さ。水は通り抜けられる */
+function solidAt(cx, cy, cz) { const b = world?.get(key(cx, cy, cz)); return !!b && b.type !== 'water'; }
 function collideAxis(pos, axis) {
   const feetY = Math.floor((pos.y + .1) / CELL);
   const headY = Math.floor((pos.y + 1.4) / CELL);
@@ -1426,7 +1635,7 @@ export function updateVoxel(dt, walkMode, t) {
   if (player.invuln > 0) player.invuln -= dt;
   if (!fp || !locked || player.dead) return;
 
-  // 移動
+  // 移動 (スプリント / スニーク / 水中減速)
   const fwd = new THREE.Vector3(); ctx.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
   const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0));
   const move = new THREE.Vector3();
@@ -1434,11 +1643,19 @@ export function updateVoxel(dt, walkMode, t) {
   if (keys.KeyS || keys.ArrowDown) move.sub(fwd);
   if (keys.KeyD || keys.ArrowRight) move.add(right);
   if (keys.KeyA || keys.ArrowLeft) move.sub(right);
-  if (move.lengthSq() > 0) move.normalize().multiplyScalar(SPEED * dt);
+  const sneak = isSneak();
+  const feetCell = worldToCell(new THREE.Vector3(player.pos.x, player.pos.y + .1, player.pos.z));
+  const inWater = typeAt(feetCell.x, feetCell.y, feetCell.z) === 'water';
+  const sprintNow = sprinting && (keys.KeyW || keys.ArrowUp) && !sneak;
+  const spd = SPEED * (sneak ? .38 : sprintNow ? 1.62 : 1) * (inWater ? .55 : 1);
+  if (move.lengthSq() > 0) move.normalize().multiplyScalar(spd * dt);
 
   const beforeX = player.pos.x, beforeZ = player.pos.z;
   player.pos.x += move.x; collideAxis(player.pos, 'x');
+  // スニーク中は踏み外さない (本家の端でのスニーク挙動)
+  if (sneak && player.onGround && groundHeightAt(player.pos.x, player.pos.z) < player.pos.y - .05) player.pos.x = beforeX;
   player.pos.z += move.z; collideAxis(player.pos, 'z');
+  if (sneak && player.onGround && groundHeightAt(player.pos.x, player.pos.z) < player.pos.y - .05) player.pos.z = beforeZ;
   // オートステップ: 接地中に1段(≤0.55m)の段差へ進もうとしたら自動で登る
   if (player.onGround && (move.x || move.z)) {
     const gAhead = groundHeightAt(player.pos.x, player.pos.z);
@@ -1472,18 +1689,102 @@ export function updateVoxel(dt, walkMode, t) {
   if (player.pos.y <= ground) { player.pos.y = ground; player.vel.y = 0; player.onGround = true; }
   else player.onGround = false;
 
-  ctx.camera.position.set(player.pos.x, player.pos.y + EYE, player.pos.z);
+  // ヘッドボブ + 足音 (歩行リズムに同期)
+  const movingNow = move.lengthSq() > 0 && player.onGround;
+  if (movingNow) bobT += dt * (sprintNow ? 12.5 : sneak ? 5 : 9);
+  const bobSin = movingNow ? Math.sin(bobT) : 0;
+  if (movingNow && bobSin < -.86 && bobPrevSin >= -.86) stepSound(groundTypeUnder(), sneak);
+  bobPrevSin = bobSin;
+  const eyeNow = EYE - (sneak ? .14 : 0) + bobSin * (sprintNow ? .05 : .035);
+  ctx.camera.position.set(player.pos.x, player.pos.y + eyeNow, player.pos.z);
+  // スプリントでFOVが広がる (本家の疾走感)
+  const fovTarget = 75 + (sprintNow ? 9 : 0);
+  if (Math.abs(ctx.camera.fov - fovTarget) > .05) {
+    ctx.camera.fov += (fovTarget - ctx.camera.fov) * Math.min(1, dt * 9);
+    ctx.camera.updateProjectionMatrix();
+  }
+  // 手持ちブロックの歩行揺れ
+  if (handGroup) {
+    handGroup.position.x = .34 + Math.cos(bobT * .5) * .012 * (movingNow ? 1 : 0);
+    handGroup.position.y = handBaseY + Math.abs(bobSin) * .022 - (sneak ? .03 : 0);
+  }
 
-  // 照準ハイライト
-  centerRay.setFromCamera(new THREE.Vector2(0, 0), ctx.camera);
-  const bh = centerRay.intersectObjects([...blockMeshes.values()], false)[0];
-  if (bh && highlight) {
+  // 照準ハイライト + 採掘 / 設置 (長押し)
+  const target = raycastBlock();
+  if (target && highlight) {
     highlight.visible = true;
-    highlight.position.copy(bh.object.position);
+    highlight.position.copy(cellToWorld(target.cell.x, target.cell.y, target.cell.z));
   } else if (highlight) highlight.visible = false;
+
+  if (holdBreak) {
+    if (target) {
+      const ck = key(target.cell.x, target.cell.y, target.cell.z);
+      if (miningCell !== ck) { miningCell = ck; miningProgress = 0; }
+      miningProgress += dt / hardness(target.type);
+      // ひび割れ表示 (5段階)
+      if (crackMesh) {
+        crackMesh.visible = true;
+        crackMesh.position.copy(cellToWorld(target.cell.x, target.cell.y, target.cell.z));
+        crackMesh.material.map = crackTex[Math.min(4, (miningProgress * 5) | 0)];
+      }
+      // 採掘中は腕を振り続ける
+      if (handGroup && !gsap.isTweening(handGroup.rotation)) swingHand();
+      if (miningProgress >= 1) {
+        breakBlockCell(target.cell.x, target.cell.y, target.cell.z);
+        miningCell = null; miningProgress = 0;
+        if (crackMesh) crackMesh.visible = false;
+      }
+    } else {
+      miningCell = null; miningProgress = 0;
+      if (crackMesh) crackMesh.visible = false;
+    }
+  }
+  if (holdPlace) {
+    placeCd -= dt;
+    if (placeCd <= 0) {
+      let placed = false;
+      if (target) placed = placeBlockCell(target.place.x, target.place.y, target.place.z);
+      else if (groundPlane) {
+        centerRay.setFromCamera(ORIGIN2, ctx.camera);
+        const gh = centerRay.intersectObject(groundPlane, false)[0];
+        if (gh) { placeOnGround(gh.point); placed = true; }
+      }
+      placeCd = placed ? .25 : .08;
+    }
+  }
 }
 
-/* 非FP(フォールバック回遊)でもクリックで壊せる */
+/* 足元のブロック種 (足音用) */
+function groundTypeUnder() {
+  const c = worldToCell(new THREE.Vector3(player.pos.x, Math.max(0, player.pos.y - .05), player.pos.z));
+  for (let y = Math.min(GRID.yMax, c.y); y >= 0; y--) {
+    const t = typeAt(c.x, y, c.z);
+    if (t && t !== 'water') return t;
+    if (t === 'water') return 'water';
+  }
+  return null;
+}
+function stepSound(type, sneak) {
+  if (!ctx?.callbacks?.audio) return;
+  const a = ctx.callbacks.audio();
+  const t = a.currentTime;
+  const cat = !type ? 'hard'
+    : type === 'water' ? 'water'
+    : (type === 'grass' || type === 'leaves' || type === 'dirt' || type.startsWith('wool:')) ? 'soft'
+    : (type === 'planks' || type === 'log' || type === 'shelf') ? 'wood' : 'hard';
+  const len = a.sampleRate * .06;
+  const buf = a.createBuffer(1, len, a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 1.8);
+  const ns = a.createBufferSource(); ns.buffer = buf;
+  const nf = a.createBiquadFilter();
+  nf.type = cat === 'hard' ? 'bandpass' : 'lowpass';
+  nf.frequency.value = ({ soft: 420, wood: 800, hard: 1500, water: 600 })[cat];
+  const ng = a.createGain(); ng.gain.value = sneak ? .02 : ({ soft: .05, wood: .06, hard: .055, water: .07 })[cat];
+  ns.connect(nf).connect(ng).connect(a.destination); ns.start(t);
+}
+
+/* 非FP(フォールバック回遊)でもクリックで壊せる (即時破壊) */
 export function voxelPointerAction(raycaster, isBreak) {
   const personMeshes = peopleList.flatMap(p => p.parts);
   const ph = raycaster.intersectObjects(personMeshes, false)[0];
@@ -1491,10 +1792,13 @@ export function voxelPointerAction(raycaster, isBreak) {
     const p = peopleList.find(q => q.parts.includes(ph.object));
     if (p) { hitMob(p); return true; }
   }
-  const bh = raycaster.intersectObjects([...blockMeshes.values()], false)[0];
-  if (bh) {
-    if (isBreak) breakBlockAt(bh.object);
-    else placeBlockAt(bh.object, bh.face.normal.clone().transformDirection(bh.object.matrixWorld));
+  const targets = [chunkMeshes.opaque, chunkMeshes.glow, chunkMeshes.trans].filter(m => m.parent);
+  const h = raycaster.intersectObjects(targets, false)[0];
+  if (h?.face) {
+    const n = h.face.normal, p = h.point;
+    const cell = worldToCell(new THREE.Vector3(p.x - n.x * .03, p.y - n.y * .03, p.z - n.z * .03));
+    if (isBreak) breakBlockCell(cell.x, cell.y, cell.z);
+    else placeBlockCell(cell.x + Math.round(n.x), cell.y + Math.round(n.y), cell.z - Math.round(n.z));
     return true;
   }
   return false;
@@ -1507,13 +1811,17 @@ function buildHotbarUI() {
   HOTBAR.forEach((b, i) => {
     const slot = document.createElement('div');
     slot.className = 'hb-slot' + (i === hotbarIdx ? ' active' : '');
-    const cv = document.createElement('canvas'); cv.width = 32; cv.height = 32;
+    slot.dataset.num = i + 1;
+    const cv = document.createElement('canvas'); cv.width = 36; cv.height = 36;
     const g = cv.getContext('2d');
     g.imageSmoothingEnabled = false;
     const src = b.type.startsWith('wool:') ? T.wool(parseInt(b.type.slice(5), 16)) : (T[b.type] ? T[b.type]() : T.stone());
-    g.drawImage(src.image, 0, 0, 32, 32);
+    // 疑似アイソメ表示 (上面明るく + 手前面) で本家のブロックアイコン風に
+    g.drawImage(src.image, 0, 0, 36, 36);
+    g.fillStyle = 'rgba(255,255,255,.18)'; g.beginPath(); g.moveTo(0, 0); g.lineTo(36, 0); g.lineTo(36, 8); g.lineTo(0, 8); g.fill();
+    g.fillStyle = 'rgba(0,0,0,.22)'; g.fillRect(0, 28, 36, 8);
     slot.appendChild(cv);
-    const lbl = document.createElement('span'); lbl.textContent = `${i + 1} ${b.n}`;
+    const lbl = document.createElement('span'); lbl.textContent = b.n;
     slot.appendChild(lbl);
     slot.onclick = () => selectHotbar(i);
     bar.appendChild(slot);
@@ -1522,6 +1830,7 @@ function buildHotbarUI() {
 function selectHotbar(i) {
   hotbarIdx = i;
   document.querySelectorAll('#hotbar .hb-slot').forEach((s, j) => s.classList.toggle('active', j === i));
+  refreshHand();
 }
 
 /* 乗場の内装用テクスチャ (フロアごとの床・壁) */
