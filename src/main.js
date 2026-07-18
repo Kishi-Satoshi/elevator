@@ -841,8 +841,9 @@ function buildPanel() {
   const fz = -D / 2;
   const panelX = (dw / 2 + W / 2) / 2;   // 扉右の前面壁セグメント中央
   cab.userData.panelX = panelX;
-  const pz = fz + .03;                    // 前面壁のすぐ内側
-
+  // 引き戸の可動面(z≈fz+.0625が最前)より前に薄型パネルを配置し、開でも閉でも
+  // 扉に隠れない(表面実装型の操作盤)
+  const pz = fz + .085;
   const plate = new THREE.Mesh(new THREE.BoxGeometry(.24, 1.72, .03), faceMat);
   plate.position.set(panelX, 1.32, pz); panelGroup.add(plate);
 
