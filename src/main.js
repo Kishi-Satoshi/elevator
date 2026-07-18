@@ -7,6 +7,7 @@ import {
   initVoxel, buildFloorVoxels, enterFPMode, exitFPMode, relockFP,
   isFPActive, updateVoxel, voxelPointerAction, voxelTextures, voxelTexSet,
   shellTexturesFor, makeBlockPerson, makeBlockWheelchair,
+  fieldSky, getDayInfo,
 } from './voxel.js';
 
 /* =====================================================================
@@ -541,6 +542,8 @@ function buildHall(dw, dh, fz) {
 
   cab.userData.roomParts = roomParts;
   cab.userData.plainsParts = plainsParts;
+  cab.userData.sun = sun; cab.userData.hemi = hemi; cab.userData.sunDisk = sunDisk;
+  cab.userData.baseSunI = 2.2; cab.userData.baseHemiI = 1.15;
 
   // 乗場照明
   const hl = new THREE.PointLight(0xfff3df, 14, 12, 1.5); hl.position.set(0, h - .35, fz - 2.2); hallGroup.add(hl);
@@ -616,11 +619,12 @@ function applyFloorTheme(floor, immediate) {
   const wallC = new THREE.Color(t.wall), floorC = new THREE.Color(t.floor), lightC = new THREE.Color(t.light);
   const hl = cab.userData.hallLight, hl2 = cab.userData.hallLight2;
   cab.userData.hallInten = t.inten;
-  // 最上階(草原)は空・太陽を表示し室内シェルを隠す
-  const plains = floor === 8;
-  scene.background = new THREE.Color(plains ? 0x9ccdf0 : 0x050608);
-  cab.userData.roomParts?.forEach(o => o.visible = !plains);
-  cab.userData.plainsParts?.forEach(o => o.visible = plains);
+  // 全フロアを開けたフィールド化: 空・太陽を表示し室内シェルを隠す
+  const baseSky = new THREE.Color(fieldSky(floor));
+  cab.userData.baseSky = baseSky;
+  scene.background = baseSky.clone();
+  cab.userData.roomParts?.forEach(o => o.visible = false);
+  cab.userData.plainsParts?.forEach(o => o.visible = true);
   drawSign(floor);
   buildHallProps(floor);
   // 乗場シェルをフロアに合わせたドット絵テクスチャに切替
@@ -641,6 +645,28 @@ function applyFloorTheme(floor, immediate) {
   gsap.to(m.wall.color, { r: wallC.r, g: wallC.g, b: wallC.b, duration: d });
   gsap.to(m.floor.color, { r: floorC.r, g: floorC.g, b: floorC.b, duration: d });
   [hl, hl2].forEach(l => gsap.to(l.color, { r: lightC.r, g: lightC.g, b: lightC.b, duration: d }));
+}
+
+/* 昼夜サイクルを空・太陽・照明・時刻HUDへ反映 */
+const NIGHT_SKY = new THREE.Color(0x0a1230);
+function applyDayNight() {
+  const info = getDayInfo();
+  const base = cab.userData.baseSky || new THREE.Color(0x9ccdf0);
+  // 空: 昼のベース色 ↔ 夜の紺 (light: 1=昼, ~0.3=夜)
+  const lit = Math.max(0, Math.min(1, (info.light - 0.3) / 0.7));
+  const sky = NIGHT_SKY.clone().lerp(base, lit);
+  if (scene.background?.isColor) scene.background.copy(sky); else scene.background = sky.clone();
+  // 太陽・環境光の強度
+  const sun = cab.userData.sun, hemi = cab.userData.hemi, sunDisk = cab.userData.sunDisk;
+  if (sun) sun.intensity = cab.userData.baseSunI * info.light;
+  if (hemi) hemi.intensity = cab.userData.baseHemiI * (0.4 + info.light * 0.6);
+  if (sunDisk) {
+    sunDisk.material.color.setHex(info.night ? 0xf4f6ff : 0xfff6d8); // 夜は月
+    sunDisk.scale.setScalar(info.night ? 0.55 : 1);
+  }
+  // 時刻HUD
+  const clk = document.getElementById('clockLabel');
+  if (clk) clk.textContent = (info.night ? '🌙 ' : '☀️ ') + info.label;
 }
 
 /* ─────────── かご内の人物（マインクラフト風ブロック体型・voxel.js） ─────────── */
@@ -1435,6 +1461,7 @@ renderer.setAnimationLoop(() => {
   // 鏡: 後方(背面壁の外側)から見るときは非表示にして視認性を確保
   if (mirrorGroup) mirrorGroup.visible = camera.position.z < dims.D / 2 - 0.02;
   updateVoxel(dt, S.view === 'walk', clock.elapsedTime);
+  if (S.view === 'walk' && isFPActive()) applyDayNight();
   renderer.render(scene, camera);
 });
 buildCab();

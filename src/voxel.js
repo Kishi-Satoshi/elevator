@@ -13,9 +13,9 @@ import gsap from 'gsap';
 ===================================================================== */
 
 const CELL = 0.5;
-const GRID_ROOM = { xMin: -9, xMax: 9, zMin: 0, zMax: 13, yMax: 5 };
+const GRID_FIELD = { xMin: -16, xMax: 16, zMin: 0, zMax: 28, yMax: 8 };   // 各階の開けたフィールド
 const GRID_PLAINS = { xMin: -30, xMax: 30, zMin: 0, zMax: 46, yMax: 10 }; // 最上階の大草原
-let GRID = GRID_ROOM;
+let GRID = GRID_FIELD;
 const PLAINS_FLOOR = 8;
 function isPlains(floor) { return floor === PLAINS_FLOOR; }
 
@@ -275,6 +275,72 @@ let peopleList = [];       // ブロック人形
 let particles = [];
 let highlight = null;
 let curFloor = 1;
+let items = [];            // 収集アイテム
+const dirtyFloors = new Set(); // プレイヤーが編集した階 (保存対象)
+
+/* ---------------- 拠点セーブ (localStorage) ---------------- */
+const SAVE_KEY = 'axiez_base_v2';
+let saveTimer = null;
+function markDirty(floor) {
+  dirtyFloors.add(floor);
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => { saveTimer = null; saveWorld(); }, 600);
+}
+function saveWorld() {
+  try {
+    const data = {};
+    for (const floor of dirtyFloors) {
+      const map = worldCache.get(floor);
+      if (!map) continue;
+      data[floor] = [...map.entries()].map(([k, v]) => k + '=' + v.type);
+    }
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+  } catch (e) { /* 保存不可でも続行 */ }
+}
+function loadSavedWorld() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    for (const floor in data) {
+      const map = new Map();
+      for (const entry of data[floor]) {
+        const i = entry.indexOf('=');
+        if (i < 0) continue;
+        map.set(entry.slice(0, i), { type: entry.slice(i + 1) });
+      }
+      worldCache.set(Number(floor), map);
+      dirtyFloors.add(Number(floor));
+    }
+  } catch (e) { /* 破損データは無視 */ }
+}
+function saveBaseManual() {
+  for (const f of worldCache.keys()) dirtyFloors.add(f);
+  saveWorld();
+  ctx?.callbacks?.toast?.('拠点を保存しました 💾');
+}
+
+/* ---------------- 昼夜サイクル ---------------- */
+/* dayT: 0..1 で1日。0=夜明け,0.25=朝,0.5=正午,0.75=夕方,0.9-1.0/0-0.1=夜 */
+const DAY_LENGTH = 150; // 1日=150秒
+let dayT = 0.28;        // 開始は朝
+let nightSpawnDone = false;
+function isNightPhase(tt) { return tt < 0.12 || tt > 0.82; }
+export function getDayInfo() {
+  const tt = dayT;
+  // 明るさ係数 (夜=0.30, 昼=1.0)
+  let light;
+  const dawn = 0.12, day1 = 0.28, day2 = 0.72, dusk = 0.88;
+  if (tt < dawn) light = 0.30;
+  else if (tt < day1) light = 0.30 + (tt - dawn) / (day1 - dawn) * 0.70;
+  else if (tt < day2) light = 1.0;
+  else if (tt < dusk) light = 1.0 - (tt - day2) / (dusk - day2) * 0.70;
+  else light = 0.30;
+  const night = isNightPhase(tt);
+  const hh = Math.floor(((tt * 24) + 6) % 24);
+  const mm = Math.floor((((tt * 24) + 6) % 1) * 60);
+  return { light, night, label: `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`, phase: tt };
+}
 
 const key = (x, y, z) => `${x},${y},${z}`;
 const cellToWorld = (x, y, z) => new THREE.Vector3(x * CELL, y * CELL + CELL / 2, fz - CELL / 2 - z * CELL);
@@ -361,63 +427,95 @@ function generatePlains() {
   return map;
 }
 
+/* 各階の特徴を活かした「開けたフィールド」テーマ (床は各階らしい素材で敷き詰め) */
+const FIELD_THEME = {
+  1: { ground: 'quartz',    edge: 'gold',      sky: 0xf1e9dc }, // 化粧品: 白大理石プラザ
+  2: { ground: 'planks',    edge: 'wool:c98a96', sky: 0xf0dbe4 }, // 婦人服: ブティックガーデン
+  3: { ground: 'stone',     edge: 'stonePath', sky: 0xc9d2dc }, // 紳士服: 石畳のモール
+  4: { ground: 'grass',     edge: 'planks',    sky: 0xbfe3d6 }, // 書籍カフェ: 中庭の書架
+  5: { ground: 'brick',     edge: 'stonePath', sky: 0xe6c9a0 }, // レストラン: 温かな中庭
+  6: { ground: 'stonePath', edge: 'gold',      sky: 0xd8cbe6 }, // 催事: 開けた広場
+  7: { ground: 'stone',     edge: 'quartz',    sky: 0x2a3350 }, // ラウンジ: 夜のテラス
+};
+export function fieldSky(floor) { return FIELD_THEME[floor]?.sky ?? (floor === 8 ? 0x9ccdf0 : 0x8fb4d6); }
+
+/* 床を一面に敷き、入口から奥へ小道を通す共通ベース */
+function fieldBase(map, groundType, edgeType) {
+  const G = GRID_FIELD;
+  fill(map, G.xMin, G.xMax, 0, 0, 1, G.zMax, groundType);
+  // 外周のふち取り
+  for (let x = G.xMin; x <= G.xMax; x++) { setBlock(map, x, 0, 1, edgeType); setBlock(map, x, 0, G.zMax, edgeType); }
+  for (let z = 1; z <= G.zMax; z++) { setBlock(map, G.xMin, 0, z, edgeType); setBlock(map, G.xMax, 0, z, edgeType); }
+  // 入口からの目抜き通り
+  for (let z = 1; z <= G.zMax; z++) { setBlock(map, 0, 0, z, 'stonePath'); setBlock(map, -1, 0, z, 'stonePath'); setBlock(map, 1, 0, z, 'stonePath'); }
+}
+
 function generateFloor(floor, accentHex) {
   if (isPlains(floor)) return generatePlains();
   const map = new Map();
   const wool = 'wool:' + accentHex.toString(16).padStart(6, '0');
+  const th = FIELD_THEME[floor] ?? FIELD_THEME[1];
+  fieldBase(map, th.ground, th.edge);
+
   switch (floor) {
-    case 1: // 化粧品: 白いカウンター + ガラス + 金アクセント
-      counterPrefab(map, -5, 3, wool); counterPrefab(map, 5, 3, wool);
-      counterPrefab(map, -5, 8, wool); counterPrefab(map, 5, 8, wool);
-      fill(map, -1, 1, 0, 0, 11, 11, 'gold');
-      lampPrefab(map, -8, 6); lampPrefab(map, 8, 6);
+    case 1: // 化粧品: 白大理石プラザ + ガラスカウンター島 + 金の噴水 + 花
+      [[-9, 4], [9, 4], [-9, 12], [9, 12], [-6, 20], [6, 20]].forEach(([x, z], i) => counterPrefab(map, x, z, wool));
+      // 中央の金の噴水 (水+金)
+      fill(map, -2, 2, 0, 0, 14, 18, 'gold');
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) setBlock(map, dx, 0, 16 + dz, 'water');
+      setBlock(map, 0, 1, 16, 'water'); setBlock(map, 0, 2, 16, 'glass');
+      [[-12, 8], [12, 8], [-12, 22], [12, 22]].forEach(([x, z]) => lampPrefab(map, x, z));
+      ['d07ab0', 'f0f0f0', 'e8c34a'].forEach((c, i) => { setBlock(map, -4 + i * 4, 1, 6, 'wool:' + c); setBlock(map, -4 + i * 4, 1, 24, 'wool:' + c); });
       break;
-    case 2: // 婦人服: カラフルなウール棚
-      ['c98a96', 'e0d0b8', '8a6e78'].forEach((c, i) => {
-        fill(map, -7 + i * 2, -7 + i * 2, 0, 1, 3, 5, 'wool:' + c);
-        fill(map, 7 - i * 2, 7 - i * 2, 0, 1, 3, 5, 'wool:' + c);
+    case 2: // 婦人服: 彩り豊かなブティックの並木ガーデン
+      ['c98a96', 'e0d0b8', '8a6e78', 'c94a55', 'd07ab0'].forEach((c, i) => {
+        const z = 4 + i * 4;
+        fill(map, -11, -8, 0, 1, z, z + 1, 'wool:' + c);
+        fill(map, 8, 11, 0, 1, z, z + 1, 'wool:' + c);
       });
-      counterPrefab(map, 0, 9, wool);
-      lampPrefab(map, -5, 11); lampPrefab(map, 5, 11);
+      [[-5, 8], [5, 12], [-5, 18], [5, 22]].forEach(([x, z]) => treePrefab(map, x, z, 3));
+      counterPrefab(map, 0, 26, wool);
+      [[-13, 6], [13, 6], [-13, 24], [13, 24]].forEach(([x, z]) => lampPrefab(map, x, z));
       break;
-    case 3: // 紳士服: 石×濃色ウールの陳列
-      fill(map, -7, -5, 0, 1, 3, 3, 'stone'); fill(map, 5, 7, 0, 1, 3, 3, 'stone');
-      fill(map, -7, -5, 2, 2, 3, 3, wool); fill(map, 5, 7, 2, 2, 3, 3, wool);
-      shelfWall(map, -3, 11, 7);
-      lampPrefab(map, 0, 6);
+    case 3: // 紳士服: 石畳のモール + 落ち着いたショーケース列
+      for (let i = 0; i < 5; i++) {
+        const z = 4 + i * 5;
+        fill(map, -10, -8, 0, 1, z, z, 'stone'); fill(map, -10, -8, 2, 2, z, z, wool);
+        fill(map, 8, 10, 0, 1, z, z, 'stone'); fill(map, 8, 10, 2, 2, z, z, wool);
+      }
+      shelfWall(map, -3, 26, 7);
+      [[-6, 10], [6, 10], [-6, 20], [6, 20]].forEach(([x, z]) => lampPrefab(map, x, z));
       break;
-    case 4: // 書籍: 本棚の迷路 + カフェ
-      shelfWall(map, -8, 3, 6); shelfWall(map, 3, 3, 6);
-      shelfWall(map, -8, 7, 6); shelfWall(map, 3, 7, 6);
-      tablePrefab(map, 0, 10, wool); tablePrefab(map, -5, 11, wool); tablePrefab(map, 5, 11, wool);
-      lampPrefab(map, 0, 5);
+    case 4: // 書籍カフェ: 芝の中庭に書架の回廊 + カフェテーブル + 木
+      shelfWall(map, -11, 5, 7); shelfWall(map, 5, 5, 7);
+      shelfWall(map, -11, 11, 7); shelfWall(map, 5, 11, 7);
+      shelfWall(map, -11, 17, 7); shelfWall(map, 5, 17, 7);
+      [[-6, 22], [0, 24], [6, 22], [-4, 8], [4, 8]].forEach(([x, z]) => tablePrefab(map, x, z, wool));
+      [[-13, 14], [13, 14], [0, 27]].forEach(([x, z]) => treePrefab(map, x, z, 4));
+      [[-8, 14], [8, 14]].forEach(([x, z]) => lampPrefab(map, x, z));
       break;
-    case 5: // レストラン: テーブル席 + レンガ厨房
-      tablePrefab(map, -5, 3, wool); tablePrefab(map, 5, 3, wool);
-      tablePrefab(map, -5, 7, wool); tablePrefab(map, 5, 7, wool);
-      tablePrefab(map, 0, 5, wool);
-      fill(map, -3, 3, 0, 1, 11, 11, 'brick');
-      fill(map, -3, 3, 2, 2, 11, 11, 'glow');
+    case 5: // レストラン: レンガの中庭にテーブル席 + かまど(厨房) + 提灯
+      [[-8, 5], [8, 5], [-8, 11], [8, 11], [-8, 17], [8, 17], [-4, 23], [4, 23]].forEach(([x, z]) => tablePrefab(map, x, z, wool));
+      // レンガ厨房
+      fill(map, -4, 4, 0, 2, 26, 27, 'brick');
+      fill(map, -3, 3, 1, 1, 26, 26, 'glow');
+      [[-12, 10], [12, 10], [-12, 20], [12, 20]].forEach(([x, z]) => lampPrefab(map, x, z));
       break;
-    case 6: // 催事場: ステージ + ウールの旗
-      fill(map, -4, 4, 0, 0, 8, 10, wool);
-      fill(map, -4, 4, 1, 1, 9, 9, 'gold');
-      ['c83c3c', 'e8c34a', '3c78c8'].forEach((c, i) => {
-        fill(map, -6 + i * 6, -6 + i * 6, 3, 4, 3, 3, 'wool:' + c);
+    case 6: // 催事: 開けた広場に中央ステージ + 万国旗のポール
+      fill(map, -6, 6, 1, 1, 12, 18, wool);
+      fill(map, -6, 6, 2, 2, 13, 17, 'gold');
+      ['c83c3c', 'e8c34a', '3c78c8', '3f9e4a', 'd07ab0'].forEach((c, i) => {
+        const x = -12 + i * 6;
+        fill(map, x, x, 1, 5, 6, 6, 'wool:' + c);
+        fill(map, x, x, 1, 5, 24, 24, 'wool:' + c);
       });
-      lampPrefab(map, -8, 5); lampPrefab(map, 8, 5);
+      [[-10, 14], [10, 14], [0, 22]].forEach(([x, z]) => lampPrefab(map, x, z));
       break;
-    case 7: // ラウンジ: 暗色 + 光源多め + バー
-      fill(map, -7, -3, 0, 0, 4, 4, wool); fill(map, -7, -3, 0, 0, 5, 5, 'planks');
-      fill(map, 3, 7, 0, 1, 9, 9, 'planks'); fill(map, 3, 7, 2, 2, 9, 9, 'glass');
-      lampPrefab(map, -8, 8); lampPrefab(map, 0, 3); lampPrefab(map, 8, 8);
-      setBlock(map, 0, 0, 11, 'gold');
-      break;
-    case 8: // 屋上庭園: 芝生 + 木 + 花壇
-      fill(map, GRID.xMin, GRID.xMax, 0, 0, 6, GRID.zMax, 'grass');
-      treePrefab(map, -6, 9, 3); treePrefab(map, 6, 10, 4); treePrefab(map, 0, 12, 3);
-      fill(map, -3, -1, 1, 1, 7, 7, 'wool:c94a55'); fill(map, 1, 3, 1, 1, 7, 7, 'wool:e8c34a');
-      lampPrefab(map, -8, 7); lampPrefab(map, 8, 7);
+    case 7: // ラウンジ: 夜のテラス — 暗色の石 + 多数の光源 + ガラスのバー
+      for (let i = 0; i < 8; i++) { const z = 3 + i * 3; lampPrefab(map, i % 2 ? -12 : 12, z); }
+      fill(map, -6, 6, 0, 1, 24, 24, 'planks'); fill(map, -6, 6, 2, 2, 24, 24, 'glass');
+      [[-5, 8], [5, 8], [-5, 16], [5, 16], [0, 12]].forEach(([x, z]) => { tablePrefab(map, x, z, wool); setBlock(map, x, 2, z, 'glow'); });
+      [[0, 20]].forEach(([x, z]) => { setBlock(map, x, 0, z, 'gold'); setBlock(map, x, 1, z, 'glow'); });
       break;
   }
   return map;
@@ -436,11 +534,13 @@ function addBlockMesh(x, y, z, type) {
 export function buildFloorVoxels(floor, parentGroup, doorZ, theme) {
   fz = doorZ;
   curFloor = floor;
-  GRID = isPlains(floor) ? GRID_PLAINS : GRID_ROOM;
+  GRID = isPlains(floor) ? GRID_PLAINS : GRID_FIELD;
   voxGroup = parentGroup;
   blockMeshes = new Map();
   peopleList.forEach(p => p.group.parent?.remove(p.group));
   peopleList = [];
+  clearItems();
+  nightSpawnDone = false;
 
   if (!worldCache.has(floor)) worldCache.set(floor, generateFloor(floor, theme?.accent ?? 0x8888aa));
   world = worldCache.get(floor);
@@ -604,6 +704,30 @@ function spawnFloorMobs(floor, accent) {
   });
 }
 
+/* 夜になると敵モブが増える (プレイヤー周辺の暗がりに湧く) */
+function spawnNightMobs() {
+  if (!voxGroup || !fp) return;
+  const pool = ['zombie', 'skeleton', 'zombie', 'slime', 'creeper'];
+  const n = isPlains(curFloor) ? 6 : 4;
+  const rand = Math.random;
+  ctx?.callbacks?.toast?.('🌙 夜だ ─ 敵が増えてくる…');
+  for (let i = 0; i < n; i++) {
+    const mob = makeMob(pool[(rand() * pool.length) | 0], rand);
+    // プレイヤーの周囲リング状に配置
+    const ang = rand() * Math.PI * 2;
+    const dist = 5 + rand() * 6;
+    const wx = player.pos.x + Math.cos(ang) * dist;
+    const wz = player.pos.z + Math.sin(ang) * dist;
+    const xLim = GRID.xMax * CELL - .5, zFar = fz - GRID.zMax * CELL, zNear = fz - CELL;
+    mob.group.position.set(
+      Math.max(-xLim, Math.min(xLim, wx)), 0,
+      Math.max(zFar, Math.min(zNear, wz)));
+    mob.aggro = true;
+    voxGroup.add(mob.group);
+    peopleList.push(mob);
+  }
+}
+
 /* 顔(-Z)を進行方向/対象へ向ける */
 function faceDir(group, dx, dz) {
   if (dx * dx + dz * dz < 1e-6) return;
@@ -699,6 +823,7 @@ function hitMob(m) {
   popSound(1.4);
   if (m.hp <= 0) {
     spawnParticles(m.group.position.clone().add(new THREE.Vector3(0, .5, 0)), m.kind === 'shopper' ? 0xd9a97e : 0x6a9b53, 14);
+    dropMobLoot(m);
     voxGroup.remove(m.group);
     m.parts.forEach(part => { part.geometry.dispose(); (Array.isArray(part.material) ? part.material : [part.material]).forEach(mm => mm.dispose?.()); });
     peopleList = peopleList.filter(q => q !== m);
@@ -709,6 +834,18 @@ function hitMob(m) {
     m.aggro = true;
     const dir = m.group.position.clone().sub(ctx.camera.position).setY(0).normalize().multiplyScalar(.4);
     gsap.to(m.group.position, { x: m.group.position.x + dir.x, z: m.group.position.z + dir.z, duration: .16 });
+  }
+}
+
+/* モブのドロップ */
+const MOB_LOOT = { shopper: 'coin', zombie: 'coin', skeleton: 'bone', slime: 'gem', creeper: 'gem' };
+function dropMobLoot(m) {
+  const base = m.group.position.clone();
+  const kind = MOB_LOOT[m.kind] || 'coin';
+  const n = 1 + ((Math.random() * (m.spec.hostile ? 2 : 1)) | 0);
+  for (let i = 0; i < n; i++) {
+    const p = base.clone().add(new THREE.Vector3((Math.random() - .5) * .5, .4, (Math.random() - .5) * .5));
+    dropItem(p, kind);
   }
 }
 
@@ -726,6 +863,8 @@ function creeperExplode(m) {
     const mesh = blockMeshes.get(key(cc.x + dx, dy, cc.z - dz));
     if (mesh) { world.delete(key(cc.x + dx, dy, cc.z - dz)); blockMeshes.delete(key(cc.x + dx, dy, cc.z - dz)); voxGroup.remove(mesh); }
   }
+  markDirty(curFloor);
+  dropItem(c.clone(), 'gem');
   // プレイヤーへ範囲ダメージ
   const dp = ctx.camera.position.distanceTo(c);
   if (dp < 3.4) damagePlayer(Math.round(m.spec.dmg * (1 - dp / 3.4)) + 2, c, m.spec.name);
@@ -916,6 +1055,91 @@ function updateParticles(dt) {
     }
   }
 }
+/* ---------------- アイテム収集 ---------------- */
+const ITEM_DEF = {
+  coin:  { color: 0xf2d162, emissive: 0xa8801a, n: 'コイン', size: [.18, .18, .05] },
+  apple: { color: 0xd8342c, emissive: 0x5a120e, n: 'りんご', size: [.16, .16, .16] },
+  gem:   { color: 0x35d0c0, emissive: 0x0e6a60, n: 'ジェム', size: [.14, .2, .14] },
+  bone:  { color: 0xe8e8dc, emissive: 0x777066, n: 'ほね',   size: [.08, .22, .08] },
+};
+const inventory = { coin: 0, apple: 0, gem: 0, bone: 0 };
+export function getInventory() { return inventory; }
+const itemGeoCache = new Map();
+function itemGeo(kind) {
+  if (!itemGeoCache.has(kind)) itemGeoCache.set(kind, new THREE.BoxGeometry(...ITEM_DEF[kind].size));
+  return itemGeoCache.get(kind);
+}
+function dropItem(pos, kind) {
+  const def = ITEM_DEF[kind]; if (!def) return;
+  const m = new THREE.Mesh(itemGeo(kind),
+    new THREE.MeshLambertMaterial({ color: def.color, emissive: def.emissive, emissiveIntensity: .5 }));
+  m.userData.shared = false;
+  m.position.copy(pos); m.position.y = Math.max(.4, pos.y + .4);
+  ctx.scene.add(m);
+  items.push({ mesh: m, kind, baseY: m.position.y, spin: Math.random() * 6, life: 30 });
+}
+function updateItems(dt, t) {
+  const cam = ctx.camera.position;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    it.life -= dt;
+    it.mesh.rotation.y = t * 2 + it.spin;
+    it.mesh.position.y = it.baseY + Math.sin(t * 3 + it.spin) * .08;
+    // プレイヤーへ吸引 → 収集
+    if (fp && !player.dead) {
+      const d = it.mesh.position.distanceTo(cam);
+      if (d < 2.0) {
+        const dir = cam.clone().sub(it.mesh.position);
+        it.mesh.position.addScaledVector(dir.normalize(), Math.min(d, 6 * dt));
+        it.baseY = it.mesh.position.y;
+      }
+      if (d < .7) { collectItem(it.kind); disposeItem(i); continue; }
+    }
+    if (it.life <= 0) disposeItem(i);
+  }
+}
+function disposeItem(i) {
+  const it = items[i];
+  ctx.scene.remove(it.mesh); it.mesh.material.dispose();
+  items.splice(i, 1);
+}
+function clearItems() {
+  for (let i = items.length - 1; i >= 0; i--) disposeItem(i);
+}
+function collectItem(kind) {
+  inventory[kind] = (inventory[kind] || 0) + 1;
+  updateInventoryUI();
+  collectSound();
+  const el = document.getElementById('invPop');
+  if (el) {
+    el.textContent = `+1 ${ITEM_DEF[kind].n}`;
+    el.style.display = 'block';
+    gsap.killTweensOf(el);
+    gsap.fromTo(el, { opacity: 1, y: 0 }, { opacity: 0, y: -14, duration: .9, onComplete: () => el.style.display = 'none' });
+  }
+}
+function updateInventoryUI() {
+  const bar = document.getElementById('invBar');
+  if (!bar) return;
+  const order = ['coin', 'apple', 'gem', 'bone'];
+  bar.innerHTML = order.map(k => {
+    const d = ITEM_DEF[k];
+    const c = '#' + new THREE.Color(d.color).getHexString();
+    return `<div class="inv-item"><span class="inv-ic" style="background:${c}"></span>${inventory[k] || 0}</div>`;
+  }).join('');
+}
+function collectSound() {
+  const a = ctx.callbacks.audio();
+  const t = a.currentTime;
+  [880, 1320].forEach((f, k) => {
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(f, t + k * .06);
+    g.gain.setValueAtTime(.0001, t + k * .06); g.gain.exponentialRampToValueAtTime(.14, t + k * .06 + .01);
+    g.gain.exponentialRampToValueAtTime(.0001, t + k * .06 + .12);
+    o.connect(g).connect(a.destination); o.start(t + k * .06); o.stop(t + k * .06 + .14);
+  });
+}
+
 function popSound(pitch = 1) {
   const a = ctx.callbacks.audio();
   const t = a.currentTime;
@@ -977,6 +1201,10 @@ function breakBlockAt(mesh) {
   spawnParticles(mesh.position, avgColor(type), 10);
   popSound(1);
   navigator.vibrate?.(12);
+  // 葉 → りんご / 金鉱脈 → コイン (マイクラ風ドロップ)
+  if (type === 'leaves' && Math.random() < .28) dropItem(mesh.position.clone(), 'apple');
+  else if (type === 'gold' && Math.random() < .6) dropItem(mesh.position.clone(), 'coin');
+  markDirty(curFloor);
 }
 function placeBlockAt(targetMesh, faceNormal) {
   const c = targetMesh.userData.cell;
@@ -994,6 +1222,7 @@ function placeBlockAt(targetMesh, faceNormal) {
   const m = addBlockMesh(nx, ny, nz, type);
   gsap.fromTo(m.scale, { x: .6, y: .6, z: .6 }, { x: 1, y: 1, z: 1, duration: .16, ease: 'back.out(2)' });
   placeSound();
+  markDirty(curFloor);
 }
 /* 床(地面)への設置: 空セルへの直接設置 (地面レイ) */
 function placeOnGround(point) {
@@ -1004,6 +1233,7 @@ function placeOnGround(point) {
   const m = addBlockMesh(c.x, 0, c.z, type);
   gsap.fromTo(m.scale, { x: .6, y: .6, z: .6 }, { x: 1, y: 1, z: 1, duration: .16, ease: 'back.out(2)' });
   placeSound();
+  markDirty(curFloor);
 }
 
 /* ---------------- 一人称コントローラ ---------------- */
@@ -1011,7 +1241,7 @@ let fp = false;
 let locked = false;
 const keys = {};
 const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), onGround: true, hp: 20, maxHp: 20, invuln: 0, dead: false };
-const EYE = 1.62, RADIUS = .22, GRAV = 20, JUMP = 6.8, SPEED = 3.4;
+const EYE = 1.62, RADIUS = .22, GRAV = 20, JUMP = 5.4, SPEED = 3.4;
 let savedFov = 66;
 const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const centerRay = new THREE.Raycaster();
@@ -1048,6 +1278,7 @@ export function initVoxel(context) {
     if (!fp) return;
     keys[e.code] = true;
     if (e.code === 'Space') e.preventDefault();
+    if (e.code === 'KeyB') { saveBaseManual(); return; } // 拠点を保存
     const num = parseInt(e.key, 10);
     if (num >= 1 && num <= HOTBAR.length) selectHotbar(num - 1);
   });
@@ -1082,6 +1313,8 @@ export function initVoxel(context) {
   });
 
   buildHotbarUI();
+  loadSavedWorld();     // 保存済み拠点を復元
+  updateInventoryUI();
 }
 
 /* 地面レイ用の透明プレーン (全フロアを覆う大きさ) */
@@ -1119,6 +1352,9 @@ export function enterFPMode() {
   player.invuln = 1.0;
   updateHearts();
   document.getElementById('hpBar').style.display = 'flex';
+  const inv = document.getElementById('invBar'); if (inv) inv.style.display = 'flex';
+  const clk = document.getElementById('clock'); if (clk) clk.style.display = 'flex';
+  updateInventoryUI();
   ctx.renderer.domElement.requestPointerLock?.();
 }
 export function exitFPMode() {
@@ -1132,6 +1368,8 @@ export function exitFPMode() {
   document.getElementById('fpOverlay').style.display = 'none';
   document.getElementById('hpBar').style.display = 'none';
   document.getElementById('gameOver').style.display = 'none';
+  const inv = document.getElementById('invBar'); if (inv) inv.style.display = 'none';
+  const clk = document.getElementById('clock'); if (clk) clk.style.display = 'none';
   player.dead = false;
   if (highlight) highlight.visible = false;
 }
@@ -1174,7 +1412,15 @@ function groundHeightAt(x, z) {
 
 export function updateVoxel(dt, walkMode, t) {
   if (walkMode) {
+    // 昼夜サイクルを進める (探索中のみ)
+    if (fp) {
+      dayT = (dayT + dt / DAY_LENGTH) % 1;
+      const info = getDayInfo();
+      if (info.night && !nightSpawnDone) { spawnNightMobs(); nightSpawnDone = true; }
+      if (!info.night) nightSpawnDone = false;
+    }
     updateMobs(dt, t);
+    updateItems(dt, t);
   }
   updateParticles(dt);
   if (player.invuln > 0) player.invuln -= dt;
@@ -1190,8 +1436,18 @@ export function updateVoxel(dt, walkMode, t) {
   if (keys.KeyA || keys.ArrowLeft) move.sub(right);
   if (move.lengthSq() > 0) move.normalize().multiplyScalar(SPEED * dt);
 
+  const beforeX = player.pos.x, beforeZ = player.pos.z;
   player.pos.x += move.x; collideAxis(player.pos, 'x');
   player.pos.z += move.z; collideAxis(player.pos, 'z');
+  // オートステップ: 接地中に1段(≤0.55m)の段差へ進もうとしたら自動で登る
+  if (player.onGround && (move.x || move.z)) {
+    const gAhead = groundHeightAt(player.pos.x, player.pos.z);
+    const rise = gAhead - player.pos.y;
+    if (rise > 0.05 && rise <= 0.55) {
+      const hc = worldToCell(new THREE.Vector3(player.pos.x, gAhead + 1.5, player.pos.z));
+      if (!solidAt(hc.x, hc.y, hc.z)) { player.pos.y = gAhead; player.vel.y = 0; }
+    }
+  }
 
   // 乗場の外周・エレベーター壁
   const xLim = GRID.xMax * CELL - .1;
@@ -1208,10 +1464,10 @@ export function updateVoxel(dt, walkMode, t) {
     player.pos.z = Math.min(player.pos.z, fz - .45);
   }
 
-  // 重力・ジャンプ
+  // 重力・ジャンプ (1ブロック=0.5mを確実に越えられる初速)
   const ground = groundHeightAt(player.pos.x, player.pos.z);
   player.vel.y -= GRAV * dt;
-  if ((keys.Space) && player.onGround) { player.vel.y = JUMP * .55; player.onGround = false; }
+  if ((keys.Space) && player.onGround) { player.vel.y = JUMP; player.onGround = false; }
   player.pos.y += player.vel.y * dt;
   if (player.pos.y <= ground) { player.pos.y = ground; player.vel.y = 0; player.onGround = true; }
   else player.onGround = false;
