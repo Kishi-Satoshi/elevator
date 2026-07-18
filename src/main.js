@@ -7,7 +7,7 @@ import {
   initVoxel, buildFloorVoxels, enterFPMode, exitFPMode, relockFP,
   isFPActive, updateVoxel, voxelPointerAction, voxelTextures, voxelTexSet,
   shellTexturesFor, makeBlockPerson, makeBlockWheelchair,
-  fieldSky, getDayInfo, setVoxelLight,
+  fieldSky, getDayInfo, setVoxelLight, dropInTop,
 } from './voxel.js';
 
 /* =====================================================================
@@ -1267,6 +1267,19 @@ async function enterFloor() {
   }
 }
 function isTouchDevice() { return matchMedia('(pointer: coarse)').matches; }
+/* 床を掘り抜いて1階下のフィールドへ落下 (探索中) */
+let descending = false;
+function descendFloor() {
+  if (descending || S.view !== 'walk' || S.curFloor <= 1) return;
+  descending = true;
+  S.curFloor -= 1;
+  applyFloorTheme(S.curFloor, true); // 下の階のフィールドを再構築 (什器・空・地面)
+  drawSign(S.curFloor); updateFloorBtnLabel();
+  dropInTop();                        // 掘った穴の真下・上空から着地
+  toast(`▼ 掘り抜いて ${S.curFloor}F へ降りた`);
+  navigator.vibrate?.(40);
+  setTimeout(() => { descending = false; }, 400);
+}
 async function returnToCab() {
   if (S.view !== 'walk') return;
   clearDepartTimer();
@@ -1607,6 +1620,7 @@ initVoxel({
     onHallCall: () => hallCall(),
     onEnterCab: () => { returnToCab(); },
     onRespawn: () => { returnToCab(); toast('やり直し ─ かごに戻りました'); },
+    onDescend: () => descendFloor(),
   },
 });
 voxelTextures.forEach(t => KEEP_TEX.add(t));
