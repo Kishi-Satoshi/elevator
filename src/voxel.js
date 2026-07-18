@@ -13,7 +13,11 @@ import gsap from 'gsap';
 ===================================================================== */
 
 const CELL = 0.5;
-const GRID = { xMin: -9, xMax: 9, zMin: 0, zMax: 13, yMax: 5 };
+const GRID_ROOM = { xMin: -9, xMax: 9, zMin: 0, zMax: 13, yMax: 5 };
+const GRID_PLAINS = { xMin: -30, xMax: 30, zMin: 0, zMax: 46, yMax: 10 }; // 最上階の大草原
+let GRID = GRID_ROOM;
+const PLAINS_FLOOR = 8;
+function isPlains(floor) { return floor === PLAINS_FLOOR; }
 
 let ctx = null; // { scene, camera, renderer, controls, callbacks }
 let fz = -0.75;
@@ -189,6 +193,12 @@ const T = {
     const l = c.clone().multiplyScalar(1.12), d = c.clone().multiplyScalar(.88);
     noiseFill(g, ['#' + c.getHexString(), '#' + l.getHexString(), '#' + d.getHexString()], seeded(hex & 0xffff));
   })),
+  water: () => tex('water', () => px16(g => noiseFill(g, ['#2f6bd0', '#3576dc', '#2a62c4', '#3e82e6'], seeded(121)))),
+  stonePath: () => tex('stonePath', () => px16(g => {
+    noiseFill(g, ['#9a968e', '#908c84', '#a4a098'], seeded(131));
+    g.fillStyle = 'rgba(0,0,0,.18)';
+    g.fillRect(0, 0, 16, 1); g.fillRect(0, 8, 16, 1); g.fillRect(8, 0, 1, 8); g.fillRect(4, 8, 1, 8);
+  })),
 };
 
 /* ---------------- ブロックレジストリ ---------------- */
@@ -221,6 +231,9 @@ function blockMats(type) {
     case 'brick': return mat('brick', { map: T.brick() });
     case 'gold': return mat('gold', { map: T.gold() });
     case 'quartz': return mat('quartz', { map: T.quartz() });
+    case 'water': return mat('water', { map: T.water(), transparent: true, opacity: .82 });
+    case 'stonePath': return mat('stonePath', { map: T.stonePath() });
+    case 'dirt': return mat('dirt', { map: T.dirt() });
     default:
       if (type.startsWith('wool:')) {
         const hex = parseInt(type.slice(5), 16);
@@ -232,6 +245,7 @@ function blockMats(type) {
 const AVG_COLOR = {
   stone: 0x8a8f94, planks: 0xb08a54, glass: 0xcfe6f2, glow: 0xffd978, log: 0x6b4d2e,
   leaves: 0x3e7a34, brick: 0x9a4032, gold: 0xe8c34a, quartz: 0xf0ede6, grass: 0x5fa04a, shelf: 0xa67f4b,
+  water: 0x3576dc, stonePath: 0x968f86, dirt: 0x6e5034,
 };
 function avgColor(type) {
   if (type.startsWith('wool:')) return parseInt(type.slice(5), 16);
@@ -304,7 +318,51 @@ function shelfWall(map, x, z, w) {
   for (let i = 0; i < w; i++) { setBlock(map, x + i, 0, z, 'shelf'); setBlock(map, x + i, 1, z, 'shelf'); }
 }
 
+/* 最上階: 部屋ではなく開けた大草原フィールド (丘・木立・花畑・池) */
+function generatePlains() {
+  const map = new Map();
+  const G = GRID_PLAINS;
+  const rand = seeded(20240808);
+  // 芝生の地面を一面に
+  fill(map, G.xMin, G.xMax, 0, 0, 1, G.zMax, 'grass');
+  // なだらかな丘 (数か所を隆起)
+  const hills = [[-16, 12, 5, 2], [14, 20, 6, 3], [-8, 34, 7, 2], [20, 38, 5, 2], [0, 40, 8, 3]];
+  for (const [hx, hz, r, hh] of hills) {
+    for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+      const d = Math.hypot(dx, dz);
+      if (d > r) continue;
+      const top = Math.max(0, Math.round(hh * (1 - d / r)));
+      for (let y = 1; y <= top; y++) setBlock(map, hx + dx, y, hz + dz, y === top ? 'grass' : 'dirt');
+    }
+  }
+  // 木立
+  const trees = [[-20, 8], [-12, 16], [-22, 26], [10, 10], [18, 14], [24, 28], [-6, 30], [6, 36], [-18, 40], [16, 42], [2, 22]];
+  for (const [tx, tz] of trees) treePrefab(map, tx, tz, 3 + ((rand() * 3) | 0));
+  // 花畑 (ウール)
+  const flowers = ['c94a55', 'e8c34a', 'd07ab0', 'f0f0f0'];
+  for (let i = 0; i < 40; i++) {
+    const fx = Math.round((rand() - .5) * (G.xMax * 2 - 4));
+    const fz2 = 2 + Math.round(rand() * (G.zMax - 4));
+    setBlock(map, fx, 1, fz2, 'wool:' + flowers[(rand() * flowers.length) | 0]);
+  }
+  // 小さな池 (グラス=水)
+  const pond = [-4, 18, 4];
+  for (let dx = -pond[2]; dx <= pond[2]; dx++) for (let dz = -pond[2]; dz <= pond[2]; dz++) {
+    if (Math.hypot(dx, dz) > pond[2]) continue;
+    map.delete(key(pond[0] + dx, 0, pond[1] + dz));
+    setBlock(map, pond[0] + dx, 0, pond[1] + dz, 'water');
+  }
+  // 石畳の小道 (入口からまっすぐ)
+  for (let z = 1; z <= 10; z++) { setBlock(map, 0, 0, z, 'stonePath'); setBlock(map, 1, 0, z, 'stonePath'); }
+  // 見晴らしの東屋 (板の小屋)
+  fill(map, 22, 26, 1, 1, 4, 4, 'planks');
+  [[22, 4], [26, 4], [22, 8], [26, 8]].forEach(([px, pz]) => { setBlock(map, px, 1, pz, 'log'); setBlock(map, px, 2, pz, 'log'); });
+  fill(map, 22, 26, 3, 3, 4, 8, 'planks');
+  return map;
+}
+
 function generateFloor(floor, accentHex) {
+  if (isPlains(floor)) return generatePlains();
   const map = new Map();
   const wool = 'wool:' + accentHex.toString(16).padStart(6, '0');
   switch (floor) {
@@ -378,6 +436,7 @@ function addBlockMesh(x, y, z, type) {
 export function buildFloorVoxels(floor, parentGroup, doorZ, theme) {
   fz = doorZ;
   curFloor = floor;
+  GRID = isPlains(floor) ? GRID_PLAINS : GRID_ROOM;
   voxGroup = parentGroup;
   blockMeshes = new Map();
   peopleList.forEach(p => p.group.parent?.remove(p.group));
@@ -390,19 +449,7 @@ export function buildFloorVoxels(floor, parentGroup, doorZ, theme) {
     addBlockMesh(x, y, z, v.type);
   }
 
-  // ブロック人形 (毎回リスポーン)
-  const rand = seeded(floor * 977 + 5);
-  const n = 3;
-  for (let i = 0; i < n; i++) {
-    const p = makeVoxPerson(rand, theme?.accent ?? 0x8888aa);
-    p.group.position.copy(cellToWorld(
-      Math.round((rand() - .5) * 12), 0,
-      3 + Math.round(rand() * 8)
-    ));
-    p.group.position.y = 0;
-    voxGroup.add(p.group);
-    peopleList.push(p);
-  }
+  spawnFloorMobs(floor, theme?.accent ?? 0x8888aa);
 
   // ハイライト枠
   if (!highlight) {
@@ -427,39 +474,328 @@ function makeHead(size, skinHex, hairHex, faceIdx) {
     [skinMat, skinMat, voxPartMat(hairHex), skinMat, skinMat, face]);
 }
 
-function makeVoxPerson(rand, accent) {
-  const g = new THREE.Group();
-  const skinHex = P_SKIN[(rand() * P_SKIN.length) | 0];
-  const hairHex = P_HAIR[(rand() * P_HAIR.length) | 0];
-  const topHex = rand() > .4 ? accent : P_TOP[(rand() * P_TOP.length) | 0];
-  const botHex = P_BOT[(rand() * P_BOT.length) | 0];
+/* ====================================================================
+   モブ (キャラクター) — 中立の買い物客 + 複数種の敵モブ
+==================================================================== */
+/* 敵種の定義。hostile:プレイヤーを襲う / behavior:挙動 */
+const MOB_KINDS = {
+  shopper:  { hostile: false, hp: 4,  speed: .55, dmg: 2, aggroR: 7,  atkR: 1.2, behavior: 'walk',  build: 'humanoid', name: '買い物客' },
+  zombie:   { hostile: true,  hp: 8,  speed: 1.15,dmg: 3, aggroR: 20, atkR: 1.4, behavior: 'chase', build: 'humanoid', name: 'ゾンビ',    skin: 0x6a9b53, hair: 0x33452a, top: 0x37506a, bot: 0x35452f, armOut: true },
+  skeleton: { hostile: true,  hp: 6,  speed: 1.35,dmg: 2, aggroR: 22, atkR: 1.4, behavior: 'chase', build: 'humanoid', name: 'スケルトン', skin: 0xe8e8e0, hair: 0xcfcfc4, top: 0xcbcbc0, bot: 0xb8b8ad, armOut: true, bony: true },
+  slime:    { hostile: true,  hp: 4,  speed: 1.7, dmg: 2, aggroR: 18, atkR: 1.2, behavior: 'hop',   build: 'slime',    name: 'スライム' },
+  creeper:  { hostile: true,  hp: 6,  speed: 1.3, dmg: 9, aggroR: 22, atkR: 1.9, behavior: 'creep', build: 'creeper',  name: 'クリーパー' },
+};
 
+/* 汎用ヒューマノイド (中立客・ゾンビ・スケルトン) */
+function buildHumanoid(spec, rand) {
+  const g = new THREE.Group();
+  const skinHex = spec.skin ?? P_SKIN[(rand() * P_SKIN.length) | 0];
+  const hairHex = spec.hair ?? P_HAIR[(rand() * P_HAIR.length) | 0];
+  const topHex = spec.top ?? (rand() > .4 ? spec.accent : P_TOP[(rand() * P_TOP.length) | 0]) ?? P_TOP[(rand() * P_TOP.length) | 0];
+  const botHex = spec.bot ?? P_BOT[(rand() * P_BOT.length) | 0];
   const parts = [];
-  const add = (w, h, d, x, y, z, matOrHex, extraMats) => {
-    const mm = extraMats ?? voxPartMat(matOrHex);
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mm);
-    m.position.set(x, y, z); g.add(m); parts.push(m);
-    return m;
+  const add = (w, h, d, x, y, z, hex) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), voxPartMat(hex));
+    m.position.set(x, y, z); g.add(m); parts.push(m); return m;
   };
-  // 脚・胴・腕・頭 (角ばったプロポーション)
-  add(.14, .38, .14, -.08, .19, 0, botHex);
-  add(.14, .38, .14, .08, .19, 0, botHex);
-  add(.34, .42, .2, 0, .59, 0, topHex);
-  const armL = add(.1, .38, .1, -.235, .60, 0, topHex);
-  const armR = add(.1, .38, .1, .235, .60, 0, topHex);
+  const legW = spec.bony ? .09 : .14;
+  add(legW, .38, .14, -.08, .19, 0, botHex);
+  add(legW, .38, .14, .08, .19, 0, botHex);
+  add(.34, .42, spec.bony ? .16 : .2, 0, .59, 0, topHex);
+  const armW = spec.bony ? .07 : .1;
+  const armL = add(armW, .38, armW, -.235, .60, 0, topHex);
+  const armR = add(armW, .38, armW, .235, .60, 0, topHex);
+  if (spec.armOut) { armL.geometry.translate(0, .17, 0); armL.position.y = .60 - .17; armL.rotation.x = -1.4;
+                     armR.geometry.translate(0, .17, 0); armR.position.y = .60 - .17; armR.rotation.x = -1.4; }
   const head = makeHead(.3, skinHex, hairHex, (rand() * FACE_VARIANTS) | 0);
   head.position.set(0, .97, 0); g.add(head); parts.push(head);
-  const hairBand = add(.32, .1, .32, 0, 1.09, 0, hairHex);
-  hairBand.position.y = 1.08;
+  const hairBand = add(.32, .1, .32, 0, 1.08, 0, hairHex);
+  return { group: g, parts, armL, armR };
+}
+/* スライム (半透明の緑キューブ + 目) */
+function buildSlime(rand) {
+  const g = new THREE.Group();
+  const parts = [];
+  const body = new THREE.Mesh(new THREE.BoxGeometry(.6, .6, .6),
+    new THREE.MeshLambertMaterial({ color: 0x67c246, transparent: true, opacity: .82 }));
+  body.position.y = .32; g.add(body); parts.push(body);
+  const inner = new THREE.Mesh(new THREE.BoxGeometry(.32, .32, .32), new THREE.MeshLambertMaterial({ color: 0x4c9c34 }));
+  inner.position.y = .3; g.add(inner); parts.push(inner);
+  [-1, 1].forEach(s => {
+    const eye = new THREE.Mesh(new THREE.BoxGeometry(.08, .08, .02), new THREE.MeshLambertMaterial({ color: 0x20301c }));
+    eye.position.set(s * .13, .42, -.31); g.add(eye); parts.push(eye);
+  });
+  const mouth = new THREE.Mesh(new THREE.BoxGeometry(.16, .05, .02), new THREE.MeshLambertMaterial({ color: 0x20301c }));
+  mouth.position.set(0, .28, -.31); g.add(mouth); parts.push(mouth);
+  return { group: g, parts, armL: null, armR: null };
+}
+/* クリーパー (縦長の緑 + 4本脚 + ドット顔) */
+function buildCreeper() {
+  const g = new THREE.Group();
+  const parts = [];
+  const skin = () => new THREE.MeshLambertMaterial({ color: 0x54a63a });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(.34, .72, .34), skin());
+  body.position.y = .74; g.add(body); parts.push(body);
+  [[-.11, -.13], [.11, -.13], [-.11, .13], [.11, .13]].forEach(([x, z]) => {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(.14, .24, .14), skin());
+    leg.position.set(x, .12, z); g.add(leg); parts.push(leg);
+  });
+  // 顔 (クリーパー特有の模様)
+  const faceTex2 = px16(g2 => {
+    g2.fillStyle = '#54a63a'; g2.fillRect(0, 0, 16, 16);
+    g2.fillStyle = '#14200e';
+    g2.fillRect(3, 4, 4, 4); g2.fillRect(9, 4, 4, 4);      // 目
+    g2.fillRect(6, 8, 4, 5); g2.fillRect(5, 10, 2, 3); g2.fillRect(9, 10, 2, 3); // 口
+  });
+  const faceMat = new THREE.MeshLambertMaterial({ map: faceTex2 });
+  const gm = new THREE.MeshLambertMaterial({ color: 0x54a63a });
+  const head = new THREE.Mesh(new THREE.BoxGeometry(.42, .42, .42), [gm, gm, gm, gm, gm, faceMat]);
+  head.position.y = 1.31; g.add(head); parts.push(head);
+  return { group: g, parts, armL: null, armR: null };
+}
 
-  g.userData.voxPerson = true;
+function makeMob(kind, rand) {
+  const spec = MOB_KINDS[kind];
+  let built;
+  if (spec.build === 'slime') built = buildSlime(rand);
+  else if (spec.build === 'creeper') built = buildCreeper();
+  else built = buildHumanoid(spec, rand);
+  built.group.userData.mob = true;
   return {
-    group: g, parts, hp: 2,
-    armL, armR, phase: rand() * 6,
-    speed: .5 + rand() * .4,
-    target: null, wait: 1 + rand() * 2,
+    ...built, kind, spec,
+    hp: spec.hp, maxHp: spec.hp,
+    speed: spec.speed * (0.9 + rand() * 0.25),
+    hostile: spec.hostile, aggro: spec.hostile, angry: 0,
+    phase: rand() * 6, target: null, wait: rand() * 2,
+    atkCd: 0, vy: 0, hopCd: rand(), fuse: -1,
   };
 }
+
+/* フロアごとのモブ配置 */
+function spawnFloorMobs(floor, accent) {
+  const rand = seeded(floor * 977 + 5);
+  const plains = isPlains(floor);
+  const list = [];
+  if (plains) {
+    // 大草原: 敵モブ多数 + 数人の客
+    const kinds = ['zombie', 'skeleton', 'slime', 'creeper', 'zombie', 'skeleton', 'slime'];
+    kinds.forEach(k => list.push(k));
+    list.push('shopper', 'shopper');
+  } else {
+    list.push('shopper', 'shopper');
+    const pool = ['zombie', 'skeleton', 'slime'];
+    list.push(pool[(rand() * pool.length) | 0]);
+    if (rand() > .5) list.push(pool[(rand() * pool.length) | 0]);
+  }
+  const xr = GRID.xMax - 2;
+  // 敵は入口付近から徐々に奥へ配置 (静止していても交戦できるよう手前にも)
+  const zNear = plains ? [3, 5, 7, 9, 12, 15, 20, 26, 3, 6] : [3, 5, 7, 9, 6];
+  list.forEach((kind, i) => {
+    if (MOB_KINDS[kind].build === 'humanoid' && kind === 'shopper') MOB_KINDS[kind].accent = accent;
+    const mob = makeMob(kind, rand);
+    // 草原でも入口前の中央付近に集めて交戦しやすく (X広がりを抑える)
+    const xspread = plains ? 12 : xr * 2;
+    const cx = Math.round((rand() - .5) * xspread);
+    const cz = zNear[i % zNear.length] + Math.round((rand() - .5) * 3);
+    mob.group.position.copy(cellToWorld(cx, 0, Math.max(2, cz)));
+    mob.group.position.y = 0;
+    voxGroup.add(mob.group);
+    peopleList.push(mob);
+  });
+}
+
+/* 顔(-Z)を進行方向/対象へ向ける */
+function faceDir(group, dx, dz) {
+  if (dx * dx + dz * dz < 1e-6) return;
+  group.rotation.y = Math.atan2(-dx, -dz);
+}
+
+/* モブの更新 (徘徊・追跡・攻撃・跳ね・爆発) */
+function updateMobs(dt, t) {
+  const pp = player.pos;
+  for (let i = peopleList.length - 1; i >= 0; i--) {
+    const m = peopleList[i];
+    if (m.atkCd > 0) m.atkCd -= dt;
+    if (m.angry > 0) m.angry -= dt;
+    const pos = m.group.position;
+    const active = fp && !player.dead; // プレイヤーが居るときだけ戦闘AI
+    const dxp = pp.x - pos.x, dzp = pp.z - pos.z;
+    const distP = Math.hypot(dxp, dzp);
+    const hostileNow = active && (m.hostile || m.angry > 0);
+
+    // クリーパー: 接近で導火線
+    if (m.kind === 'creeper' && hostileNow) {
+      if (distP < 2.2 && m.fuse < 0) m.fuse = 1.4;
+      if (m.fuse >= 0) {
+        m.fuse -= dt;
+        const fl = (Math.sin(t * 22) > 0) ? 1 : 0; // 点滅
+        m.parts.forEach(part => { const mm = part.material; if (mm.emissive) { mm.emissive.setHex(fl ? 0xffffff : 0x000000); } else if (!Array.isArray(mm)) { part.material.emissive = new THREE.Color(fl ? 0x884400 : 0x000000); } });
+        if (m.fuse <= 0) { creeperExplode(m); peopleList.splice(i, 1); continue; }
+      }
+    }
+
+    if (hostileNow && distP < m.spec.aggroR) {
+      // 追跡
+      faceDir(m.group, dxp, dzp);
+      if (distP > m.spec.atkR) {
+        const spd = m.speed * dt;
+        const nx = (dxp / distP) * spd, nz = (dzp / distP) * spd;
+        pos.x = Math.max(GRID.xMin * CELL, Math.min(GRID.xMax * CELL, pos.x + nx));
+        pos.z = Math.max(fz - GRID.zMax * CELL, Math.min(fz - CELL, pos.z + nz));
+      } else if (m.atkCd <= 0 && m.kind !== 'creeper') {
+        // 近接攻撃
+        damagePlayer(m.spec.dmg, pos, m.spec.name);
+        m.atkCd = 1.0;
+        if (m.armL) { gsap.fromTo(m.armL.rotation, { x: -1.9 }, { x: m.spec.armOut ? -1.4 : 0, duration: .3 }); }
+      }
+    } else {
+      // 徘徊
+      if (m.wait > 0) { m.wait -= dt; }
+      else {
+        if (!m.target) {
+          m.target = cellToWorld(
+            Math.round((Math.random() - .5) * (GRID.xMax * 2 - 2)), 0,
+            2 + Math.round(Math.random() * (GRID.zMax - 3)));
+          m.target.y = 0;
+        }
+        const dx = m.target.x - pos.x, dz = m.target.z - pos.z;
+        const d = Math.hypot(dx, dz);
+        if (d < .12) { m.target = null; m.wait = 1 + Math.random() * 3; }
+        else { const spd = m.speed * .6 * dt; pos.x += (dx / d) * spd; pos.z += (dz / d) * spd; faceDir(m.group, dx, dz); }
+      }
+    }
+
+    // 接地 + 挙動アニメ
+    const gh = groundHeightAt(pos.x, pos.z);
+    if (m.spec.behavior === 'hop') {
+      m.vy -= 16 * dt;
+      pos.y += m.vy * dt;
+      if (pos.y <= gh) {
+        pos.y = gh; m.vy = 0;
+        m.hopCd -= dt;
+        if (m.hopCd <= 0 && (hostileNow || Math.random() < .01)) { m.vy = 4.4; m.hopCd = .5 + Math.random(); }
+      }
+      m.group.scale.y = 1 + Math.min(.25, Math.max(-.15, m.vy * .04));
+    } else {
+      pos.y = gh;
+      if (m.armL && !m.spec.armOut) {
+        const moving = hostileNow || m.target;
+        const sw = moving ? Math.sin(t * 8 + m.phase) * .6 : 0;
+        m.armL.rotation.x = sw; m.armR.rotation.x = -sw;
+        pos.y = gh + (moving ? Math.abs(Math.sin(t * 8 + m.phase)) * .02 : 0);
+      }
+    }
+  }
+}
+
+/* プレイヤーが攻撃 (反撃を誘発) */
+function hitMob(m) {
+  m.hp -= 3;
+  navigator.vibrate?.(20);
+  m.parts.forEach(part => {
+    const mats = Array.isArray(part.material) ? part.material : [part.material];
+    mats.forEach(mm => { if (mm.emissive !== undefined) { mm.emissive = new THREE.Color(0xff3333); gsap.fromTo(mm, { emissiveIntensity: .9 }, { emissiveIntensity: 0, duration: .35, onComplete: () => mm.emissive?.setHex(0x000000) }); } });
+  });
+  popSound(1.4);
+  if (m.hp <= 0) {
+    spawnParticles(m.group.position.clone().add(new THREE.Vector3(0, .5, 0)), m.kind === 'shopper' ? 0xd9a97e : 0x6a9b53, 14);
+    voxGroup.remove(m.group);
+    m.parts.forEach(part => { part.geometry.dispose(); (Array.isArray(part.material) ? part.material : [part.material]).forEach(mm => mm.dispose?.()); });
+    peopleList = peopleList.filter(q => q !== m);
+    ctx.callbacks.toast(`${m.spec.name}をたおした！`);
+  } else {
+    // 反撃: 中立客は怒って敵対化。全モブ即時にプレイヤーへ反応
+    if (!m.hostile) { m.angry = 8; ctx.callbacks.toast(`${m.spec.name}を怒らせた！反撃してくる`); }
+    m.aggro = true;
+    const dir = m.group.position.clone().sub(ctx.camera.position).setY(0).normalize().multiplyScalar(.4);
+    gsap.to(m.group.position, { x: m.group.position.x + dir.x, z: m.group.position.z + dir.z, duration: .16 });
+  }
+}
+
+/* クリーパー爆発 */
+function creeperExplode(m) {
+  const c = m.group.position.clone();
+  boomSound();
+  spawnParticles(c.clone().add(new THREE.Vector3(0, .5, 0)), 0x54a63a, 22);
+  spawnParticles(c.clone().add(new THREE.Vector3(0, .5, 0)), 0x2a2a2a, 12);
+  // ブロック破壊 (半径内)
+  const cc = worldToCell(c);
+  const R = 3;
+  for (let dx = -R; dx <= R; dx++) for (let dy = 0; dy <= R; dy++) for (let dz = -R; dz <= R; dz++) {
+    if (dx * dx + dy * dy + dz * dz > R * R) continue;
+    const mesh = blockMeshes.get(key(cc.x + dx, dy, cc.z - dz));
+    if (mesh) { world.delete(key(cc.x + dx, dy, cc.z - dz)); blockMeshes.delete(key(cc.x + dx, dy, cc.z - dz)); voxGroup.remove(mesh); }
+  }
+  // プレイヤーへ範囲ダメージ
+  const dp = ctx.camera.position.distanceTo(c);
+  if (dp < 3.4) damagePlayer(Math.round(m.spec.dmg * (1 - dp / 3.4)) + 2, c, m.spec.name);
+  voxGroup.remove(m.group);
+  m.parts.forEach(part => { part.geometry.dispose(); (Array.isArray(part.material) ? part.material : [part.material]).forEach(mm => mm.dispose?.()); });
+}
+
+/* ====================================================================
+   プレイヤー HP / 被弾 / ゲームオーバー
+==================================================================== */
+function heartSVG(state) {
+  // state: 'full' | 'half' | 'empty'
+  const fill = state === 'empty' ? '#3a1518' : '#e02736';
+  const half = state === 'half';
+  const path = 'M11 19 C4 13 1 9 1 6 C1 3 3 1 5.5 1 C7.5 1 10 2.5 11 4.5 C12 2.5 14.5 1 16.5 1 C19 1 21 3 21 6 C21 9 18 13 11 19 Z';
+  const halfClip = half ? '<clipPath id="hc"><rect x="0" y="0" width="11" height="22"/></clipPath>' : '';
+  const emptyRight = half ? `<path d="${path}" fill="#3a1518"/>` : '';
+  const fillPath = half
+    ? `${emptyRight}<path d="${path}" fill="${fill}" clip-path="url(#hc)"/>`
+    : `<path d="${path}" fill="${fill}"/>`;
+  return `<svg viewBox="0 0 22 20">${halfClip}${fillPath}<path d="${path}" fill="none" stroke="#1a0a0c" stroke-width="1.4"/></svg>`;
+}
+function updateHearts() {
+  const bar = document.getElementById('hpBar');
+  const total = player.maxHp / 2;
+  let html = '';
+  for (let i = 0; i < total; i++) {
+    const v = player.hp - i * 2;
+    const state = v >= 2 ? 'full' : v === 1 ? 'half' : 'empty';
+    html += `<div class="heart">${heartSVG(state)}</div>`;
+  }
+  bar.innerHTML = html;
+}
+function damagePlayer(amount, sourcePos, name) {
+  if (!fp || player.dead || player.invuln > 0) return;
+  player.hp = Math.max(0, player.hp - amount);
+  player.invuln = .6;
+  updateHearts();
+  // 被弾フラッシュ
+  const f = document.getElementById('dmgFlash');
+  gsap.killTweensOf(f);
+  gsap.fromTo(f, { opacity: .85 }, { opacity: 0, duration: .5 });
+  navigator.vibrate?.(60);
+  hurtSound();
+  // ノックバック
+  if (sourcePos) {
+    const kb = player.pos.clone().sub(sourcePos).setY(0).normalize().multiplyScalar(.6);
+    player.pos.x += kb.x; player.pos.z += kb.z; player.vel.y = 3.2;
+  }
+  const tip = document.getElementById('mobTip');
+  tip.style.display = 'block'; tip.textContent = `${name ?? ''} の攻撃！`;
+  gsap.killTweensOf(tip); gsap.fromTo(tip, { opacity: 1 }, { opacity: 0, delay: .8, duration: .5, onComplete: () => tip.style.display = 'none' });
+  if (player.hp <= 0) gameOver();
+}
+function gameOver() {
+  player.dead = true;
+  if (document.pointerLockElement) document.exitPointerLock?.();
+  document.getElementById('gameOver').style.display = 'flex';
+  document.getElementById('crosshair').style.display = 'none';
+  hurtSound(); setTimeout(boomSound, 120);
+}
+function respawnPlayer() {
+  player.hp = player.maxHp; player.dead = false; player.invuln = 1.2;
+  updateHearts();
+  document.getElementById('gameOver').style.display = 'none';
+  // かごへ戻す (やり直し)
+  exitFPMode();
+  ctx.callbacks.onRespawn();
+}
+export function isDead() { return player.dead; }
 
 /* ─────────── かご内用ブロック人形 (静止・実寸プロポーション) ─────────── */
 /* Minecraft風の直方体体型。~1.7m。かご内で近くから見るので少しディテールを足す */
@@ -549,55 +885,6 @@ export function makeBlockWheelchair(rand) {
   g.userData.blockPerson = true;
   return g;
 }
-function updatePeople(dt, t) {
-  for (const p of peopleList) {
-    if (p.wait > 0) { p.wait -= dt; continue; }
-    if (!p.target) {
-      const r = Math.random;
-      p.target = cellToWorld(
-        Math.round((r() - .5) * (GRID.xMax * 2 - 2)), 0,
-        2 + Math.round(r() * (GRID.zMax - 3))
-      );
-      p.target.y = 0;
-    }
-    const pos = p.group.position;
-    const dx = p.target.x - pos.x, dz = p.target.z - pos.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist < .1) { p.target = null; p.wait = 1.5 + Math.random() * 3; continue; }
-    const vx = (dx / dist) * p.speed * dt, vz = (dz / dist) * p.speed * dt;
-    pos.x += vx; pos.z += vz;
-    p.group.rotation.y = Math.atan2(dx, dz);
-    const sw = Math.sin(t * 7 + p.phase) * .5;
-    p.armL.rotation.x = sw; p.armR.rotation.x = -sw;
-    pos.y = Math.abs(Math.sin(t * 7 + p.phase)) * .02;
-  }
-}
-function hitPerson(p) {
-  p.hp -= 1;
-  navigator.vibrate?.(20);
-  // 赤フラッシュ
-  p.parts.forEach(m => {
-    const mats = Array.isArray(m.material) ? m.material : [m.material];
-    mats.forEach(mm => {
-      if (!mm.emissive) return;
-      gsap.fromTo(mm, { emissiveIntensity: .9 }, { emissiveIntensity: 0, duration: .35 });
-      mm.emissive = new THREE.Color(0xff3333);
-    });
-  });
-  popSound(1.4);
-  if (p.hp <= 0) {
-    spawnParticles(p.group.position.clone().add(new THREE.Vector3(0, .6, 0)), 0xd9a97e, 14);
-    voxGroup.remove(p.group);
-    p.parts.forEach(m => { m.geometry.dispose(); (Array.isArray(m.material) ? m.material : [m.material]).forEach(mm => mm.dispose()); });
-    peopleList = peopleList.filter(q => q !== p);
-    ctx.callbacks.toast('ブロック人形をたおした！ (次の来店時に復活します)');
-  } else {
-    // ノックバック
-    const dir = p.group.position.clone().sub(ctx.camera.position).setY(0).normalize().multiplyScalar(.35);
-    gsap.to(p.group.position, { x: p.group.position.x + dir.x, z: p.group.position.z + dir.z, duration: .18 });
-  }
-}
-
 /* ---------------- 破壊・設置 ---------------- */
 function spawnParticles(center, colorHex, count = 10) {
   const geo = new THREE.BoxGeometry(.07, .07, .07);
@@ -658,6 +945,29 @@ function placeSound() {
   g.gain.setValueAtTime(.16, t); g.gain.exponentialRampToValueAtTime(.0001, t + .1);
   o.connect(g).connect(a.destination); o.start(t); o.stop(t + .12);
 }
+function hurtSound() {
+  const a = ctx.callbacks.audio();
+  const t = a.currentTime, o = a.createOscillator(), g = a.createGain();
+  o.type = 'square'; o.frequency.setValueAtTime(200, t); o.frequency.exponentialRampToValueAtTime(90, t + .18);
+  g.gain.setValueAtTime(.2, t); g.gain.exponentialRampToValueAtTime(.0001, t + .22);
+  o.connect(g).connect(a.destination); o.start(t); o.stop(t + .24);
+}
+function boomSound() {
+  const a = ctx.callbacks.audio();
+  const t = a.currentTime;
+  const len = a.sampleRate * .5;
+  const buf = a.createBuffer(1, len, a.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 1.6);
+  const ns = a.createBufferSource(); ns.buffer = buf;
+  const nf = a.createBiquadFilter(); nf.type = 'lowpass'; nf.frequency.setValueAtTime(1200, t); nf.frequency.exponentialRampToValueAtTime(120, t + .45);
+  const ng = a.createGain(); ng.gain.setValueAtTime(.5, t); ng.gain.exponentialRampToValueAtTime(.0001, t + .5);
+  ns.connect(nf).connect(ng).connect(a.destination); ns.start(t);
+  const o = a.createOscillator(), og = a.createGain();
+  o.type = 'sine'; o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(35, t + .4);
+  og.gain.setValueAtTime(.4, t); og.gain.exponentialRampToValueAtTime(.0001, t + .45);
+  o.connect(og).connect(a.destination); o.start(t); o.stop(t + .5);
+}
 
 function breakBlockAt(mesh) {
   const { cell, type } = mesh.userData;
@@ -700,7 +1010,7 @@ function placeOnGround(point) {
 let fp = false;
 let locked = false;
 const keys = {};
-const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), onGround: true };
+const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), onGround: true, hp: 20, maxHp: 20, invuln: 0, dead: false };
 const EYE = 1.62, RADIUS = .22, GRAV = 20, JUMP = 6.8, SPEED = 3.4;
 let savedFov = 66;
 const euler = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -719,9 +1029,10 @@ export function initVoxel(context) {
   document.addEventListener('pointerlockchange', () => {
     locked = document.pointerLockElement === dom;
     if (locked) justLocked = true;
-    document.getElementById('fpOverlay').style.display = (fp && !locked) ? 'flex' : 'none';
+    document.getElementById('fpOverlay').style.display = (fp && !locked && !player.dead) ? 'flex' : 'none';
     document.getElementById('crosshair').style.display = (fp && locked) ? 'block' : 'none';
   });
+  document.getElementById('respawnBtn').onclick = () => respawnPlayer();
   document.addEventListener('mousemove', e => {
     if (!fp || !locked) return;
     // ロック直後のスパイク (巨大な movement 値) を無視する
@@ -749,12 +1060,12 @@ export function initVoxel(context) {
     // 乗場の呼びボタン
     const callHit = centerRay.intersectObjects(ctx.callbacks.getBtnHits(), false)[0];
     if (callHit?.object.userData.hallCall && e.button === 0) { ctx.callbacks.onHallCall(); return; }
-    // ブロック人形
+    // モブ (攻撃)
     const personMeshes = peopleList.flatMap(p => p.parts);
     const ph = centerRay.intersectObjects(personMeshes, false)[0];
     if (ph && e.button === 0) {
       const p = peopleList.find(q => q.parts.includes(ph.object));
-      if (p) { hitPerson(p); return; }
+      if (p) { hitMob(p); return; }
     }
     // ブロック
     const bh = centerRay.intersectObjects([...blockMeshes.values()], false)[0];
@@ -773,11 +1084,11 @@ export function initVoxel(context) {
   buildHotbarUI();
 }
 
-/* 地面レイ用の透明プレーン (乗場床と同じ位置) */
+/* 地面レイ用の透明プレーン (全フロアを覆う大きさ) */
 function ensureGroundPlane() {
   if (groundPlane) return;
   groundPlane = new THREE.Mesh(
-    new THREE.PlaneGeometry(GRID.xMax * 2 * CELL + 2, (GRID.zMax + 2) * CELL + 2),
+    new THREE.PlaneGeometry(GRID_PLAINS.xMax * 2 * CELL + 4, (GRID_PLAINS.zMax + 3) * CELL + 4),
     new THREE.MeshBasicMaterial({ visible: false })
   );
   groundPlane.rotation.x = -Math.PI / 2;
@@ -803,6 +1114,11 @@ export function enterFPMode() {
   euler.set(0, 0, 0); // フロア奥 (-Z) を向く
   ctx.camera.quaternion.setFromEuler(euler);
   document.getElementById('hotbar').style.display = 'flex';
+  // HP初期化 (満タンで探索開始)
+  if (player.hp <= 0 || player.dead) { player.hp = player.maxHp; player.dead = false; }
+  player.invuln = 1.0;
+  updateHearts();
+  document.getElementById('hpBar').style.display = 'flex';
   ctx.renderer.domElement.requestPointerLock?.();
 }
 export function exitFPMode() {
@@ -814,6 +1130,9 @@ export function exitFPMode() {
   document.getElementById('hotbar').style.display = 'none';
   document.getElementById('crosshair').style.display = 'none';
   document.getElementById('fpOverlay').style.display = 'none';
+  document.getElementById('hpBar').style.display = 'none';
+  document.getElementById('gameOver').style.display = 'none';
+  player.dead = false;
   if (highlight) highlight.visible = false;
 }
 export function relockFP() {
@@ -855,10 +1174,11 @@ function groundHeightAt(x, z) {
 
 export function updateVoxel(dt, walkMode, t) {
   if (walkMode) {
-    updatePeople(dt, t);
+    updateMobs(dt, t);
   }
   updateParticles(dt);
-  if (!fp || !locked) return;
+  if (player.invuln > 0) player.invuln -= dt;
+  if (!fp || !locked || player.dead) return;
 
   // 移動
   const fwd = new THREE.Vector3(); ctx.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
@@ -881,8 +1201,9 @@ export function updateVoxel(dt, walkMode, t) {
   const dw = ctx.callbacks.getDoorWidth();
   const nearDoor = Math.abs(player.pos.x) < dw / 2 - .1;
   if (nearDoor && ctx.callbacks.isDoorsOpen()) {
-    // 開いたドアからかごへ戻れる
-    if (player.pos.z > fz - .32) { ctx.callbacks.onEnterCab(); return; }
+    // 開いたドアからかごへ戻れる。ただし被弾ノックバック中(invuln)は帰還しない
+    // (敵に押し戻されて探索が終了してしまうのを防ぐ)
+    if (player.invuln <= 0 && player.pos.z > fz - .32) { ctx.callbacks.onEnterCab(); return; }
   } else {
     player.pos.z = Math.min(player.pos.z, fz - .45);
   }
@@ -912,7 +1233,7 @@ export function voxelPointerAction(raycaster, isBreak) {
   const ph = raycaster.intersectObjects(personMeshes, false)[0];
   if (ph && isBreak) {
     const p = peopleList.find(q => q.parts.includes(ph.object));
-    if (p) { hitPerson(p); return true; }
+    if (p) { hitMob(p); return true; }
   }
   const bh = raycaster.intersectObjects([...blockMeshes.values()], false)[0];
   if (bh) {

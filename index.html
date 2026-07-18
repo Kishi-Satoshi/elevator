@@ -4,6 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
 <title>AXIEZ-LINKs EXPERIENCE — 意匠3Dシミュレーター（非公式）</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@300;400;500;700&family=Inter:wght@200;400;600&display=swap" rel="stylesheet">
 <style>
@@ -208,6 +209,24 @@ canvas{display:block;}
 #fpOverlay .keys{display:inline-block;text-align:left;}
 #fpOverlay .rowbtns{justify-content:center;display:flex;gap:10px;}
 #fpOverlay .ctl{min-width:150px;flex:none;}
+
+/* HP ハート / 被弾 / ゲームオーバー */
+#hpBar{display:none;position:fixed;left:18px;bottom:16px;z-index:46;gap:3px;
+  filter:drop-shadow(0 2px 3px rgba(0,0,0,.6));}
+#hpBar .heart{width:22px;height:20px;position:relative;}
+#hpBar .heart svg{width:100%;height:100%;display:block;}
+#dmgFlash{position:fixed;inset:0;z-index:47;pointer-events:none;opacity:0;
+  background:radial-gradient(ellipse at center,rgba(200,0,0,0) 35%,rgba(190,0,0,.55) 100%);}
+#mobTip{display:none;position:fixed;left:50%;top:58%;transform:translateX(-50%);z-index:46;
+  font-size:11px;letter-spacing:.14em;color:#ffd0d0;text-shadow:0 1px 3px #000;pointer-events:none;}
+#gameOver{display:none;position:fixed;inset:0;z-index:59;background:rgba(8,0,0,.82);
+  backdrop-filter:blur(5px);flex-direction:column;align-items:center;justify-content:center;}
+#gameOver h2{font-family:Inter,sans-serif;font-weight:200;font-size:clamp(34px,7vw,64px);
+  letter-spacing:.22em;color:#e12530;margin:0 0 8px;}
+#gameOver p{font-size:12px;color:var(--sub);letter-spacing:.14em;margin:0 0 30px;}
+#gameOver #respawnBtn{all:unset;cursor:pointer;border:1px solid var(--ink);padding:15px 40px;
+  letter-spacing:.3em;font-size:13px;transition:.3s;}
+#gameOver #respawnBtn:hover{background:var(--ink);color:var(--void);}
 #toast{position:fixed;left:50%;top:70px;transform:translateX(-50%);z-index:50;background:var(--panel-solid);
   border:1px solid var(--hair);padding:10px 22px;font-size:11px;letter-spacing:.14em;opacity:0;pointer-events:none;}
 
@@ -254,14 +273,24 @@ canvas{display:block;}
 <!-- ============ ボクセル探索 (一人称) ============ -->
 <div id="crosshair"></div>
 <div id="hotbar"></div>
+<div id="hpBar"></div>
+<div id="dmgFlash"></div>
+<div id="mobTip"></div>
+<div id="gameOver">
+  <h2>GAME OVER</h2>
+  <p>ダメージが蓄積しました ─ やられてしまった…</p>
+  <button id="respawnBtn">やり直す</button>
+</div>
 <div id="fpOverlay">
   <div class="box">
     <h3 id="fpTitle">FLOOR EXPLORER</h3>
     <p>
       <span class="keys">
         W A S D ── 歩く ／ マウス ── 視点 ／ Space ── ジャンプ<br>
-        左クリック ── ブロック・人形をこわす ／ 右クリック ── ブロックをおく<br>
-        1〜8 ── ブロック選択 ／ 開いたドアへ歩くとかごに戻ります
+        左クリック ── こうげき（ブロック・敵をこわす）／ 右クリック ── ブロックをおく<br>
+        1〜8 ── ブロック選択 ／ 開いたドアへ歩くとかごに戻ります<br>
+        <b style="color:#e0808a">敵に攻撃すると反撃されHP（ハート）が減ります。0になるとゲームオーバー。</b><br>
+        最上階(8F)は大草原。ゾンビ・スケルトン・スライム・クリーパーが出現します。
       </span>
     </p>
     <div class="rowbtns">
