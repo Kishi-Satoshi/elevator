@@ -501,35 +501,46 @@ function buildHall(dw, dh, fz) {
   const hallCeilMat = new THREE.MeshStandardMaterial({ color: 0xe8e6e2, roughness: .92 });
   cab.userData.hallMats = { wall: hallWallMat, floor: hallFloorMat, ceil: hallCeilMat };
 
-  // エレベーター側の壁（ドア開口を避けた2枚 + 上部）— 乗場から見た面
+  // エレベーター側の壁（ドア開口を避けた2枚 + 上部）— 乗場から見た面。草原でも昇降路の外壁として残す
   const sideWHall = (w - dw) / 2;
   [[-(dw / 2 + sideWHall / 2)], [dw / 2 + sideWHall / 2]].forEach(([x]) => {
     const m = P(sideWHall, h, hallWallMat); m.position.set(x, h / 2, fz - .02); m.rotation.y = Math.PI; hallGroup.add(m);
   });
   const head = P(dw, h - dh, hallWallMat); head.position.set(0, dh + (h - dh) / 2, fz - .02); head.rotation.y = Math.PI; hallGroup.add(head);
 
-  // 床・天井・奥壁・側壁
-  const hf = P(w, d, hallFloorMat); hf.rotation.x = -Math.PI / 2; hf.position.set(0, .002, fz - d / 2); hallGroup.add(hf);
-  const hc = P(w, d, hallCeilMat); hc.rotation.x = Math.PI / 2; hc.position.set(0, h, fz - d / 2); hallGroup.add(hc);
-  const bw = P(w, h, hallWallMat); bw.position.set(0, h / 2, fz - d); hallGroup.add(bw);
-  const sl = P(d, h, hallWallMat); sl.rotation.y = Math.PI / 2; sl.position.set(-w / 2, h / 2, fz - d / 2); hallGroup.add(sl);
-  const sr = P(d, h, hallWallMat); sr.rotation.y = -Math.PI / 2; sr.position.set(w / 2, h / 2, fz - d / 2); hallGroup.add(sr);
-
-  // 柱
+  // 室内シェル (床・天井・奥壁・側壁・柱・ダウンライト) — 草原では非表示に切替
+  const roomParts = [];
+  const hf = P(w, d, hallFloorMat); hf.rotation.x = -Math.PI / 2; hf.position.set(0, .002, fz - d / 2); hallGroup.add(hf); roomParts.push(hf);
+  const hc = P(w, d, hallCeilMat); hc.rotation.x = Math.PI / 2; hc.position.set(0, h, fz - d / 2); hallGroup.add(hc); roomParts.push(hc);
+  const bw = P(w, h, hallWallMat); bw.position.set(0, h / 2, fz - d); hallGroup.add(bw); roomParts.push(bw);
+  const sl = P(d, h, hallWallMat); sl.rotation.y = Math.PI / 2; sl.position.set(-w / 2, h / 2, fz - d / 2); hallGroup.add(sl); roomParts.push(sl);
+  const sr = P(d, h, hallWallMat); sr.rotation.y = -Math.PI / 2; sr.position.set(w / 2, h / 2, fz - d / 2); hallGroup.add(sr); roomParts.push(sr);
   const colMat = new THREE.MeshStandardMaterial({ color: 0xcfcac0, roughness: .7 });
-  cab.userData.hallColMat = colMat;
   [[-3.2, -2.2], [3.2, -2.2], [-3.2, -5.2], [3.2, -5.2]].forEach(([x, z]) => {
     const c = new THREE.Mesh(new THREE.BoxGeometry(.34, h, .34), colMat);
-    c.position.set(x, h / 2, fz + z); hallGroup.add(c);
+    c.position.set(x, h / 2, fz + z); hallGroup.add(c); roomParts.push(c);
   });
-
-  // 天井ダウンライト（発光ディスク）
   const dlMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff2dc, emissiveIntensity: 2.2 });
-  cab.userData.hallDlMat = dlMat;
   for (const x of [-2.6, 0, 2.6]) for (const z of [-1.6, -3.7, -5.8]) {
     const dsk = new THREE.Mesh(new THREE.CircleGeometry(.13, 20), dlMat);
-    dsk.rotation.x = Math.PI / 2; dsk.position.set(x, h - .01, fz + z); hallGroup.add(dsk);
+    dsk.rotation.x = Math.PI / 2; dsk.position.set(x, h - .01, fz + z); hallGroup.add(dsk); roomParts.push(dsk);
   }
+
+  // 大草原の空・太陽 (最上階のみ表示)
+  const plainsParts = [];
+  const sun = new THREE.DirectionalLight(0xfff4e0, 2.2); sun.position.set(6, 16, fz - 8); hallGroup.add(sun); plainsParts.push(sun);
+  const hemi = new THREE.HemisphereLight(0xbfe0ff, 0x4a6a3a, 1.15); hallGroup.add(hemi); plainsParts.push(hemi);
+  const sunDisk = new THREE.Mesh(new THREE.CircleGeometry(3.2, 24), new THREE.MeshBasicMaterial({ color: 0xfff6d8 }));
+  sunDisk.position.set(-14, 16, fz - 40); hallGroup.add(sunDisk); plainsParts.push(sunDisk);
+  // 遠景の雲 (板)
+  const cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .82 });
+  [[-8, 11, -30], [10, 13, -36], [0, 15, -42], [-16, 12, -22]].forEach(([cx, cy, cz]) => {
+    const cl = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.8), cloudMat);
+    cl.position.set(cx, cy, fz + cz); hallGroup.add(cl); plainsParts.push(cl);
+  });
+
+  cab.userData.roomParts = roomParts;
+  cab.userData.plainsParts = plainsParts;
 
   // 乗場照明
   const hl = new THREE.PointLight(0xfff3df, 14, 12, 1.5); hl.position.set(0, h - .35, fz - 2.2); hallGroup.add(hl);
@@ -605,6 +616,11 @@ function applyFloorTheme(floor, immediate) {
   const wallC = new THREE.Color(t.wall), floorC = new THREE.Color(t.floor), lightC = new THREE.Color(t.light);
   const hl = cab.userData.hallLight, hl2 = cab.userData.hallLight2;
   cab.userData.hallInten = t.inten;
+  // 最上階(草原)は空・太陽を表示し室内シェルを隠す
+  const plains = floor === 8;
+  scene.background = new THREE.Color(plains ? 0x9ccdf0 : 0x050608);
+  cab.userData.roomParts?.forEach(o => o.visible = !plains);
+  cab.userData.plainsParts?.forEach(o => o.visible = plains);
   drawSign(floor);
   buildHallProps(floor);
   // 乗場シェルをフロアに合わせたドット絵テクスチャに切替
@@ -1395,6 +1411,7 @@ initVoxel({
     getBtnHits: () => btnHits,
     onHallCall: () => hallCall(),
     onEnterCab: () => { returnToCab(); },
+    onRespawn: () => { returnToCab(); toast('やり直し ─ かごに戻りました'); },
   },
 });
 voxelTextures.forEach(t => KEEP_TEX.add(t));

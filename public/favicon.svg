@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <rect x="6" y="6" width="244" height="244" rx="56" fill="#0a0a0b"/>
+  <!-- 赤いスウォッシュ (白いAの下をくぐる) -->
+  <path d="M92 206 Q150 150 196 158" fill="none" stroke="#d81f2a" stroke-width="30"
+        stroke-linecap="round"/>
+  <!-- 白いA (山形・クロスバーなし) -->
+  <path d="M128 46 L60 210" fill="none" stroke="#ffffff" stroke-width="30"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M128 46 L196 210" fill="none" stroke="#ffffff" stroke-width="30"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
