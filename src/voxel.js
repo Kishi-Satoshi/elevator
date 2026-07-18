@@ -1673,10 +1673,12 @@ export function updateVoxel(dt, walkMode, t) {
   player.pos.z = Math.max(zFar, player.pos.z);
   const dw = ctx.callbacks.getDoorWidth();
   const nearDoor = Math.abs(player.pos.x) < dw / 2 - .1;
+  // ドアへ「自分で歩いて」向かっているときだけ帰還 (move.z > 0 = +Z=ドア方向)。
+  // 被弾ノックバックや敵の押し込みでは戻らない。
+  const walkingToDoor = move.z > 0.0006;
   if (nearDoor && ctx.callbacks.isDoorsOpen()) {
-    // 開いたドアからかごへ戻れる。ただし被弾ノックバック中(invuln)は帰還しない
-    // (敵に押し戻されて探索が終了してしまうのを防ぐ)
-    if (player.invuln <= 0 && player.pos.z > fz - .32) { ctx.callbacks.onEnterCab(); return; }
+    if (player.invuln <= 0 && walkingToDoor && player.pos.z > fz - .34) { ctx.callbacks.onEnterCab(); return; }
+    player.pos.z = Math.min(player.pos.z, fz - .34); // 押し戻されても敷居で止め、かごに入れない
   } else {
     player.pos.z = Math.min(player.pos.z, fz - .45);
   }

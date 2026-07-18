@@ -152,7 +152,8 @@ function viewPose(mode) {
   const fz = -dims.D / 2;
   if (mode === 'walk') return { pos: [0.4, 1.62, fz - 0.7], tgt: [0, 1.25, fz - 3.4] };
   if (mode === 'doll') return { pos: [-3.2, 3.2, 3.1], tgt: [0, 1.05, -0.6] };
-  return { pos: [-0.34, 1.5, -0.12], tgt: [0.28, 1.26, 0.62] };
+  // かご内: 扉(-Z)側を向いて立つ。左後方に構えて右前の操作盤(COP)も画面に収める
+  return { pos: [-dims.W * 0.22, 1.52, dims.D / 2 - 0.28], tgt: [dims.W * 0.3, 1.3, fz] };
 }
 function applyLimits(m) {
   const c = VIEW_LIMITS[m];
@@ -189,7 +190,7 @@ function syncViewToggles() {
 const ANGLES = {
   front: () => ({ p: [0, 1.48, -dims.D / 2 + .16], t: [0, 1.3, dims.D / 2] }),
   back: () => ({ p: [0, 1.5, dims.D / 2 - .16], t: [0, 1.32, -dims.D / 2] }),
-  panel: () => ({ p: [dims.W / 2 - .58, 1.45, -dims.D / 2 + .5], t: [dims.W / 2, 1.45, -dims.D / 2 + .5] }),
+  panel: () => { const px = cab.userData.panelX ?? dims.W * .4; return { p: [px * .35, 1.44, -dims.D / 2 + .9], t: [px, 1.32, -dims.D / 2] }; },
   ceil: () => ({ p: [0, 1.15, .12], t: [0, dims.H, 0] }),
   floor: () => ({ p: [0, 1.72, .06], t: [0, 0, .06] }),
 };
@@ -835,41 +836,47 @@ function buildPanel() {
     ? new THREE.MeshStandardMaterial({ color: 0x26282c, metalness: .85, roughness: .4 })
     : M.sus;
 
-  const px = W / 2 - .022, pz = -D / 2 + .5;
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(.03, 1.62, .36), faceMat);
-  plate.position.set(px, 1.34, pz); panelGroup.add(plate);
+  // 操作盤は扉の右横・前面壁 (実機と同じレイアウト)。ボタンは +Z（かご内側）を向く
+  const dw = cab.userData.dw ?? Math.min(.92, W * .62);
+  const fz = -D / 2;
+  const panelX = (dw / 2 + W / 2) / 2;   // 扉右の前面壁セグメント中央
+  cab.userData.panelX = panelX;
+  const pz = fz + .03;                    // 前面壁のすぐ内側
 
-  // 10.1型 縦型液晶
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(.24, 1.72, .03), faceMat);
+  plate.position.set(panelX, 1.32, pz); panelGroup.add(plate);
+
+  // 10.1型 縦型液晶 (+Z を向く)
   const lcd = new THREE.Mesh(new THREE.PlaneGeometry(.16, .26),
     new THREE.MeshBasicMaterial({ map: lcdTex }));
-  lcd.rotation.y = -Math.PI / 2; lcd.position.set(px - .017, 1.92, pz); panelGroup.add(lcd);
+  lcd.position.set(panelX, 1.92, pz + .017); panelGroup.add(lcd);
 
-  // 大型ボタン（8フロア + 開/閉）
-  const mkBtn = (y, z, floor, label) => {
+  // 大型ボタン（8フロア + 開/閉） — 円筒軸を Z 方向へ向け、丸ボタンが正面を向く
+  const mkBtn = (y, x, floor, label) => {
     const ring = new THREE.Mesh(new THREE.CylinderGeometry(.036, .036, .006, 28),
       new THREE.MeshStandardMaterial({ color: p.ring, metalness: .7, roughness: .35 }));
-    ring.rotation.z = Math.PI / 2; ring.position.set(px - .016, y, z); panelGroup.add(ring);
+    ring.rotation.x = Math.PI / 2; ring.position.set(x, y, pz + .016); panelGroup.add(ring);
     const mat = new THREE.MeshStandardMaterial({
       color: p.btn, metalness: S.panel === 'crystal' ? .1 : .6,
       roughness: S.panel === 'crystal' ? .15 : .4, emissive: p.glow, emissiveIntensity: 0,
       transparent: S.panel === 'crystal', opacity: S.panel === 'crystal' ? .92 : 1,
     });
     const b = new THREE.Mesh(new THREE.CylinderGeometry(.028, .028, .013, 28), mat);
-    b.rotation.z = Math.PI / 2; b.position.set(px - .021, y, z);
-    b.userData.restX = px - .021;
+    b.rotation.x = Math.PI / 2; b.position.set(x, y, pz + .021);
+    b.userData.restZ = pz + .021;
     panelGroup.add(b);
     const engr = new THREE.Mesh(new THREE.PlaneGeometry(.042, .042),
       new THREE.MeshBasicMaterial({ map: btnLabelTex(floor ?? label, dark), transparent: true }));
-    engr.rotation.y = -Math.PI / 2; engr.position.set(px - .0285, y, z); panelGroup.add(engr);
+    engr.position.set(x, y, pz + .0285); panelGroup.add(engr);
     if (S.panel === 'touchless') {
       const halo = new THREE.Mesh(new THREE.RingGeometry(.038, .044, 28),
         new THREE.MeshBasicMaterial({ color: 0x46d3ff, transparent: true, opacity: .7, side: THREE.DoubleSide }));
-      halo.rotation.y = -Math.PI / 2; halo.position.set(px - .027, y, z); panelGroup.add(halo);
+      halo.position.set(x, y, pz + .027); panelGroup.add(halo);
     }
     // 拡大ヒット領域（不可視）
     const hit = new THREE.Mesh(new THREE.CircleGeometry(.055, 12),
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
-    hit.rotation.y = -Math.PI / 2; hit.position.set(px - .032, y, z);
+    hit.position.set(x, y, pz + .04);
     hit.userData = { floor, label, btn: b, ring };
     panelGroup.add(hit); btnHits.push(hit);
     if (floor) floorBtnMap[floor] = { btn: b, ring };
@@ -877,26 +884,31 @@ function buildPanel() {
   };
   let i = 0;
   for (let r = 0; r < 4; r++) for (let c = 0; c < 2; c++) {
-    const f = 8 - i; mkBtn(1.62 - r * .105, pz - .058 + c * .116, f); i++;
+    const f = 8 - i; mkBtn(1.68 - r * .12, panelX - .058 + c * .116, f); i++;
   }
-  mkBtn(1.12, pz - .058, null, 'open'); mkBtn(1.12, pz + .058, null, 'close');
+  mkBtn(1.14, panelX - .058, null, 'open'); mkBtn(1.14, panelX + .058, null, 'close');
   highlightFloorBtn();
 }
 /* 登録済み行先は強く点灯・現在階は淡く点灯 */
 function highlightFloorBtn() {
   for (const [f, o] of Object.entries(floorBtnMap)) {
     const fl = Number(f);
-    o.btn.material.emissiveIntensity = fl === S.pending ? 1.0 : (fl === S.curFloor && !S.pending ? .32 : 0);
+    const queued = rideQueue.has(fl);
+    o.btn.material.emissiveIntensity = queued ? 1.0 : (fl === S.curFloor && !S.moving ? .32 : 0);
   }
 }
 /* 押下フィードバック：沈み込み + 発光フラッシュ + パルスリング */
 function pressFX(u) {
   const b = u.btn;
-  if (b) {
+  if (b && b.userData.restZ !== undefined) {
     gsap.killTweensOf(b.position);
-    gsap.fromTo(b.position, { x: b.userData.restX + .009 }, { x: b.userData.restX, duration: .45, ease: 'elastic.out(1.2,0.4)' });
+    gsap.fromTo(b.position, { z: b.userData.restZ - .012 }, { z: b.userData.restZ, duration: .45, ease: 'elastic.out(1.2,0.4)' });
     const baseI = b.material.emissiveIntensity;
     gsap.fromTo(b.material, { emissiveIntensity: 1.8 }, { emissiveIntensity: Math.max(baseI, .0), duration: .8, ease: 'power2.out', onComplete: highlightFloorBtn });
+  } else if (b && b.material) {
+    // 乗場呼びボタン等（沈み込みなし・発光フラッシュのみ）
+    const baseI = b.material.emissiveIntensity ?? 0;
+    gsap.fromTo(b.material, { emissiveIntensity: 1.8 }, { emissiveIntensity: baseI, duration: .8, ease: 'power2.out' });
   }
   navigator.vibrate?.(18);
 }
@@ -1095,64 +1107,127 @@ function arrivalText(f) {
   const en = g ? `${ordinalEn(f)} floor. ${g.en}.` : `${ordinalEn(f)} floor`;
   return [ja, en];
 }
-async function ride(target) {
-  if (S.moving || target === S.curFloor) return;
+/* ── 行先キュー式エレベーター (走行中の途中階も登録・停車できる SCAN 方式) ── */
+const rideQueue = new Set();   // 登録された行先フロア
+let riding = false;            // ドライブループ稼働中か
+let carPos = 1;                // 連続フロア位置
+let carDir = 0;                // 走行方向 (1:上 / -1:下 / 0:停止)
+let carVel = 0;                // フロア/秒
+const CAR_CRUISE = 1.5, CAR_ACCEL = 1.7;
+
+/* 行先を登録 (走行中でも受け付ける) */
+function ride(target) {
   if (S.view === 'walk') { toast('かごに戻ってから行先を選んでください'); return; }
+  if (target === S.curFloor && !S.moving) {
+    if (!S.doorsOpen) { cue('open', 'ドアが開きます', 'The doors are opening'); doors(true); }
+    return;
+  }
+  rideQueue.add(target);
+  highlightFloorBtn(); markFloorBtns();
+  if (!riding) driveLoop();
+}
+
+/* 現在位置・進行方向から次に停まる階を選ぶ (SCAN: 進行方向優先) */
+function pickNextStop() {
+  const arr = [...rideQueue];
+  if (!arr.length) return null;
+  const up = () => arr.filter(f => f > carPos + 1e-3).sort((a, b) => a - b)[0];
+  const down = () => arr.filter(f => f < carPos - 1e-3).sort((a, b) => b - a)[0];
+  const nearest = () => arr.slice().sort((a, b) => Math.abs(a - carPos) - Math.abs(b - carPos))[0];
+  if (carDir >= 0) return up() ?? down() ?? nearest();
+  return down() ?? up() ?? nearest();
+}
+
+/* 1区間の走行 (加減速つき)。毎フレーム getStop() を呼ぶので、途中でより近い階が
+   登録されると自動で手前に再ターゲットして停車する */
+function driveLeg(getStop) {
+  return new Promise(resolve => {
+    let last = performance.now();
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let shake = null, expo = null;
+    if (!reduce) {
+      shake = gsap.to(camera.position, { y: '+=0.006', duration: .09, yoyo: true, repeat: -1, ease: 'sine.inOut', paused: true });
+      expo = gsap.fromTo(renderer, { toneMappingExposure: 1.05 }, { toneMappingExposure: .99, duration: .8, yoyo: true, repeat: -1 });
+    }
+    const cleanup = () => { shake?.kill(); expo?.kill(); renderer.toneMappingExposure = 1.05; };
+    const tick = () => {
+      const now = performance.now();
+      const dt = Math.min((now - last) / 1000, .05); last = now;
+      const stop = getStop();
+      if (stop == null) { cleanup(); resolve(null); return; }
+      const sign = stop > carPos ? 1 : -1;
+      carDir = sign;
+      const remaining = Math.abs(stop - carPos);
+      // スナップ到着 (減速で漸近して停まりきらないのを防ぐ)
+      let arrived = remaining <= 0.04;
+      // 停止に必要な速度上限 + 最低速度 (確実に停止階へ到達する)
+      const vMax = Math.max(0.3, Math.min(CAR_CRUISE, Math.sqrt(2 * CAR_ACCEL * remaining)));
+      if (carVel < vMax) carVel = Math.min(vMax, carVel + CAR_ACCEL * dt);
+      else carVel = Math.max(vMax, carVel - CAR_ACCEL * 2 * dt);
+      carPos += sign * carVel * dt;
+      if ((sign > 0 && carPos >= stop) || (sign < 0 && carPos <= stop)) arrived = true;
+      if (arrived) {
+        carPos = stop; carVel = 0;
+        const f = Math.round(carPos);
+        if (f !== S.curFloor) { S.curFloor = f; setHud(f, null); tickSound(); }
+        cleanup();
+        resolve(stop); return;
+      }
+      const f = Math.round(carPos);
+      if (f !== S.curFloor) { S.curFloor = f; setHud(f, carDir > 0 ? 'up' : 'down'); tickSound(); }
+      const v = Math.min(1, carVel / CAR_CRUISE);
+      humSet(v);
+      if (shake) { if (v > .12 && shake.paused()) shake.play(); shake.timeScale(Math.max(.3, v)); }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+/* キューが尽きるまで停車→開閉を繰り返すメインループ (単一稼働) */
+async function driveLoop() {
+  riding = true;
   S.moving = true;
-  S.pending = target;
   clearDepartTimer();
   floorHud.classList.add('moving');
-  const dir = target > S.curFloor ? 'up' : 'down';
-  markFloorBtns(target); highlightFloorBtn();
-  cue(dir === 'up' ? 'up' : 'down', dir === 'up' ? '上へまいります' : '下へまいります', dir === 'up' ? 'Going up' : 'Going down');
-  await new Promise(r => setTimeout(r, 900));
-  if (S.doorsOpen) { cue('close', 'ドアが閉まります。ご注意ください', 'The doors are closing'); await doors(false, 1.4); }
-  await new Promise(r => setTimeout(r, 250));
-  humStart();
-  cab.userData.hallLight.intensity = 0; cab.userData.hallLight2.intensity = 0;
-  applyFloorTheme(target, false); // 走行中に次フロアの空気感へ遷移 (什器はドアが閉じている間に入替)
-  const o = { f: S.curFloor, p: 0 };
-  const dist = Math.abs(target - S.curFloor);
-  setHud(S.curFloor, dir);
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let shake = null;
-  if (!reduce) {
-    shake = gsap.to(camera.position, { y: '+=0.006', duration: .09, yoyo: true, repeat: -1, ease: 'sine.inOut', paused: true });
-    gsap.fromTo(renderer, { toneMappingExposure: 1.05 }, { toneMappingExposure: .98, duration: .6, yoyo: true, repeat: 3 });
+  carPos = S.curFloor; carVel = 0;
+  while (rideQueue.size) {
+    const stop = pickNextStop();
+    if (stop == null) break;
+    carDir = stop > carPos ? 1 : (stop < carPos ? -1 : (carDir || 1));
+    const dir = carDir > 0 ? 'up' : 'down';
+    highlightFloorBtn(); markFloorBtns();
+    cue(dir, dir === 'up' ? '上へまいります' : '下へまいります', dir === 'up' ? 'Going up' : 'Going down');
+    await new Promise(r => setTimeout(r, 650));
+    if (S.doorsOpen) { cue('close', 'ドアが閉まります。ご注意ください', 'The doors are closing'); await doors(false, 1.4); }
+    await new Promise(r => setTimeout(r, 200));
+    humStart();
+    cab.userData.hallLight.intensity = 0; cab.userData.hallLight2.intensity = 0;
+    setHud(Math.round(carPos), dir);
+    // 走行 (途中でより近い階が登録されたら pickNextStop が再ターゲット)
+    const reached = await driveLeg(pickNextStop);
+    humStop();
+    const arrived = reached ?? Math.round(carPos);
+    rideQueue.delete(arrived);
+    S.curFloor = arrived;
+    setHud(arrived, null);
+    applyFloorTheme(arrived, false); // 什器・空気感を到着階へ (ドアが閉じている間に入替)
+    chime(carDir > 0 ? 'up' : 'down');
+    highlightFloorBtn(); markFloorBtns();
+    const [ja, en] = arrivalText(arrived);
+    if (voiceClips?.arrive && S.lang === 'ja') playClip(voiceClips.arrive);
+    else speak(ja, en);
+    await new Promise(r => setTimeout(r, 800));
+    const inten = cab.userData.hallInten ?? 1;
+    gsap.to(cab.userData.hallLight, { intensity: 14 * inten, duration: .6 });
+    gsap.to(cab.userData.hallLight2, { intensity: 8 * inten, duration: .6 });
+    cue('open', 'ドアが開きます', 'The doors are opening');
+    await doors(true, 1.4);
+    if (rideQueue.size) await new Promise(r => setTimeout(r, 1100)); // 次区間まで小休止
   }
-  const dur = Math.min(1.1 * dist + 0.6, 7);
-  await new Promise(res => {
-    gsap.to(o, {
-      f: target, p: 1, duration: dur, ease: 'power2.inOut',
-      onUpdate: () => {
-        const v = Math.sin(Math.PI * Math.min(1, Math.max(0, o.p)));
-        humSet(v);
-        if (shake) { if (v > .12 && shake.paused()) shake.play(); shake.timeScale(Math.max(.3, v)); }
-        const f = Math.round(o.f);
-        if (f !== S.curFloor) { S.curFloor = f; setHud(f, dir); tickSound(); }
-      },
-      onComplete: res,
-    });
-  });
-  shake?.kill(); gsap.to(camera.position, { y: camera.position.y, duration: .3 });
-  renderer.toneMappingExposure = 1.05;
-  humStop();
-  chime(dir);
-  S.curFloor = target;
-  S.pending = null;
-  setHud(target, null);
-  highlightFloorBtn(); markFloorBtns(null);
+  S.moving = false; riding = false; carDir = 0; carVel = 0;
   floorHud.classList.remove('moving');
-  const [ja, en] = arrivalText(target);
-  if (voiceClips?.arrive && S.lang === 'ja') playClip(voiceClips.arrive);
-  else speak(ja, en);
-  await new Promise(r => setTimeout(r, 900));
-  const inten = cab.userData.hallInten ?? 1;
-  gsap.to(cab.userData.hallLight, { intensity: 14 * inten, duration: .6 });
-  gsap.to(cab.userData.hallLight2, { intensity: 8 * inten, duration: .6 });
-  cue('open', 'ドアが開きます', 'The doors are opening');
-  await doors(true, 1.4);
-  S.moving = false;
+  highlightFloorBtn(); markFloorBtns();
   if (S.view === 'walk') armDepartTimer();
 }
 function ordinalEn(n) { return n + (n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'); }
@@ -1347,10 +1422,13 @@ for (let f = 8; f >= 1; f--) {
   b.onclick = () => { btnBeep(); toast(`${f}F を登録しました`); ride(f); };
   b.dataset.f = f; fbWrap.appendChild(b);
 }
-function markFloorBtns(target) {
-  $$('#floorBtns .fb').forEach(b => b.classList.toggle('now', Number(b.dataset.f) === (target ?? S.curFloor)));
+function markFloorBtns() {
+  $$('#floorBtns .fb').forEach(b => {
+    const f = Number(b.dataset.f);
+    b.classList.toggle('now', rideQueue.has(f) || (rideQueue.size === 0 && f === S.curFloor));
+  });
 }
-markFloorBtns(null);
+markFloorBtns();
 
 $('#btnDoor').onclick = () => {
   if (S.moving) return;
@@ -1486,12 +1564,15 @@ $('#startBtn').onclick = () => {
       camera.position.set(0, 1.5, -2.35); controls.target.set(0, 1.42, 0); controls.update();
     })
     .to([gl, gr], { xPercent: i => i === 0 ? -101 : 101, duration: 1.7, ease: 'power4.inOut' }, '+=.15')
-    .to(camera.position, { x: -0.34, y: 1.5, z: -0.12, duration: 2.6, ease: 'power3.inOut' }, '<.35')
-    .to(controls.target, { x: 0.28, y: 1.26, z: 0.62, duration: 2.6, ease: 'power3.inOut', onUpdate: () => controls.update() }, '<')
+    // かごへ入り、扉(前面右の操作盤)側を向いて落ち着く
+    .to(camera.position, { x: -dims.W * 0.22, y: 1.52, z: dims.D / 2 - 0.28, duration: 2.6, ease: 'power3.inOut' }, '<.35')
+    .to(controls.target, { x: dims.W * 0.3, y: 1.3, z: -dims.D / 2, duration: 2.6, ease: 'power3.inOut', onUpdate: () => controls.update() }, '<')
     .to('#panel', { opacity: 1, duration: .7 }, '<1.4')
     .to('#floorHud', { opacity: 1, duration: .7 }, '<')
     .fromTo('#hint', { opacity: 0 }, { opacity: 1, duration: .6, onComplete: () => gsap.to('#hint', { opacity: 0, delay: 3, duration: 1 }) }, '<.3')
-    .set([gl, gr], { display: 'none' });
+    .set([gl, gr], { display: 'none' })
+    // 乗車後は扉を閉じる（実機同様）。閉じると扉横の操作盤(COP)がはっきり見える
+    .call(() => { cue('close', 'ドアが閉まります。ご注意ください', 'The doors are closing'); doors(false, 1.3); }, null, '+=.6');
 };
 
 /* ホームへ戻る */
@@ -1500,7 +1581,7 @@ $('#homeBtn').onclick = () => {
   exitFPMode();
   speechSynthesis?.cancel();
   if (clipAudio) clipAudio.pause();
-  S.view = 'cab'; S.doorsOpen = true; S.pending = null;
+  S.view = 'cab'; S.doorsOpen = true; rideQueue.clear();
   applyLimits('cab');
   syncViewToggles(); updateFloorBtnLabel();
   resetView(true);
