@@ -542,7 +542,10 @@ const FIELD_THEME = {
   6: { ground: 'stonePath', edge: 'gold',      sky: 0xd8cbe6 }, // 催事: 開けた広場
   7: { ground: 'stone',     edge: 'quartz',    sky: 0x2a3350 }, // ラウンジ: 夜のテラス
 };
-export function fieldSky(floor) { return FIELD_THEME[floor]?.sky ?? (floor === 8 ? 0x9ccdf0 : 0x8fb4d6); }
+export function fieldSky(floor) {
+  if (floor <= 0) return 0x0a0a0e; // 地下は暗い
+  return FIELD_THEME[floor]?.sky ?? (floor === 8 ? 0x9ccdf0 : 0x8fb4d6);
+}
 
 /* 床を一面に敷き、入口から奥へ小道を通す共通ベース */
 function fieldBase(map, groundType, edgeType) {
@@ -555,8 +558,36 @@ function fieldBase(map, groundType, edgeType) {
   for (let z = 1; z <= G.zMax; z++) { setBlock(map, 0, 0, z, 'stonePath'); setBlock(map, -1, 0, z, 'stonePath'); setBlock(map, 1, 0, z, 'stonePath'); }
 }
 
+/* 地下フロア (床を掘り抜くと降りる。閉じた薄暗い空間) */
+function generateBasement(floor, accentHex) {
+  const map = new Map();
+  const wool = 'wool:' + accentHex.toString(16).padStart(6, '0');
+  fieldBase(map, 'stone', 'stonePath');           // コンクリート床
+  // 支柱を格子状に (地下らしい柱)
+  for (let gx = -12; gx <= 12; gx += 8) for (let gz = 5; gz <= 25; gz += 10) {
+    for (let y = 0; y <= 4; y++) setBlock(map, gx, y, gz, 'stone');
+    setBlock(map, gx, 3, gz, 'glow'); // 柱の灯り
+  }
+  if (floor === 0) {            // B1 デパ地下(食品): 陳列棚とショーケース
+    for (let z = 6; z <= 22; z += 6) { shelfWall(map, -10, z, 5); shelfWall(map, 5, z, 5); }
+    counterPrefab(map, 0, 12, wool); counterPrefab(map, 0, 20, wool);
+    setBlock(map, -3, 1, 4, 'wool:c8a860'); setBlock(map, 3, 1, 4, 'wool:c94a55');
+  } else if (floor === -1) {    // B2 駐車場: 区画線と駐車中の箱(車)
+    for (let x = -13; x <= 13; x += 5) { setBlock(map, x, 0, 6, wool); setBlock(map, x, 0, 16, wool); setBlock(map, x, 0, 24, wool); }
+    [[-9, 9], [-3, 9], [3, 9], [9, 9], [-9, 19], [3, 19], [9, 19]].forEach(([x, z]) => {
+      fill(map, x - 1, x + 1, 1, 1, z, z + 1, 'wool:2c2f38'); fill(map, x - 1, x + 1, 2, 2, z, z, 'glass');
+    });
+  } else {                      // B3 機械室・倉庫: 金属設備とパイプ
+    fill(map, -6, 6, 1, 2, 22, 24, 'stone'); fill(map, -6, 6, 3, 3, 22, 24, 'gold');
+    [[-9, 7], [9, 7], [-9, 15], [9, 15]].forEach(([x, z]) => { setBlock(map, x, 0, z, 'quartz'); setBlock(map, x, 1, z, 'glow'); });
+    for (let z = 4; z <= 26; z += 2) setBlock(map, -14, 3, z, 'gold'); // 天井パイプ
+  }
+  return map;
+}
+
 function generateFloor(floor, accentHex) {
   if (isPlains(floor)) return generatePlains();
+  if (floor <= 0) return generateBasement(floor, accentHex);
   const map = new Map();
   const wool = 'wool:' + accentHex.toString(16).padStart(6, '0');
   const th = FIELD_THEME[floor] ?? FIELD_THEME[1];
@@ -1700,10 +1731,10 @@ export function updateVoxel(dt, walkMode, t) {
   player.vel.y -= GRAV * dt;
   if ((keys.Space) && player.onGround) { player.vel.y = JUMP; player.onGround = false; }
   player.pos.y += player.vel.y * dt;
-  // 床を掘り抜いて落下 → 1階下のフロアへ (最下階は落ちない)
+  // 床を掘り抜いて落下 → 1階下(地下含む)へ。最深部は main 側が false を返すのでその場で着地
   if (player.pos.y < -0.8) {
-    if (curFloor > 1 && ctx.callbacks.onDescend) { ctx.callbacks.onDescend(); return; }
-    player.pos.y = 0; player.vel.y = 0; player.onGround = true; // 1F は床が抜けない
+    if (ctx.callbacks.onDescend && ctx.callbacks.onDescend()) return;
+    player.pos.y = 0; player.vel.y = 0; player.onGround = true; // これ以上は掘り抜けない
   } else if (player.pos.y <= ground) { player.pos.y = ground; player.vel.y = 0; player.onGround = true; }
   else player.onGround = false;
 

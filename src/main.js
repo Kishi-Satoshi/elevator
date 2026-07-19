@@ -90,6 +90,17 @@ const FLOOR_GUIDE = [
   { jp: 'スカイラウンジ', en: 'Sky Lounge', wall: 0x28303e, floor: 0x20262f, light: 0xffca8c, inten: 0.55, accent: 0xe8a84c, arch: 'living' },
   { jp: '屋上庭園・展望', en: 'Rooftop Garden', wall: 0xc4d8e2, floor: 0xb2ab92, light: 0xf2faff, inten: 1.45, accent: 0x5a9a4c, arch: 'garden' },
 ];
+/* 地下フロア (床を掘り抜くと降りられる)。0=B1, -1=B2, -2=B3 */
+const MIN_FLOOR = -2;
+const BASEMENT_GUIDE = {
+  0:  { jp: '食品・デパ地下', en: 'Food Hall (B1)', wall: 0x2a2620, floor: 0x22201c, light: 0xffdca0, inten: .6, accent: 0xc8a860, arch: 'basement' },
+  '-1': { jp: '駐車場', en: 'Parking (B2)', wall: 0x24262a, floor: 0x1c1e22, light: 0xcfe0ff, inten: .5, accent: 0x8890a0, arch: 'basement' },
+  '-2': { jp: '機械室・倉庫', en: 'Machine Room (B3)', wall: 0x1e2024, floor: 0x181a1e, light: 0xa8e0ff, inten: .45, accent: 0x6a7280, arch: 'basement' },
+};
+function floorGuide(f) { return f >= 1 ? FLOOR_GUIDE[f] : BASEMENT_GUIDE[f]; }
+function floorLabel(f) { return f >= 1 ? String(f) : 'B' + (1 - f); }      // 0→B1, -1→B2, -2→B3
+function floorSign(f) { return f >= 1 ? `${f}F` : floorLabel(f); }
+function isBasement(f) { return f <= 0; }
 
 /* 状態 */
 const S = {
@@ -375,10 +386,10 @@ function drawLCD(floor, dir) {
   g.fillStyle = '#9fdcff'; g.font = '300 30px Inter,sans-serif'; g.textAlign = 'center';
   g.fillText(dir === 'up' ? '▲' : dir === 'down' ? '▼' : '■', w / 2, 56);
   g.fillStyle = '#eaf7ff'; g.font = '200 140px Inter,sans-serif';
-  g.fillText(String(floor), w / 2, 250);
+  g.fillText(floorLabel(floor), w / 2, 250);
   g.fillStyle = '#6fb8d8'; g.font = '400 17px "Zen Kaku Gothic New",sans-serif';
-  g.fillText(floor + '階', w / 2, 294);
-  const guide = FLOOR_GUIDE[floor];
+  g.fillText(floor >= 1 ? floor + '階' : '地下' + (1 - floor) + '階', w / 2, 294);
+  const guide = floorGuide(floor);
   if (guide) {
     g.fillStyle = '#bfe6f8'; g.font = '400 15px "Zen Kaku Gothic New",sans-serif';
     g.fillText(guide.jp, w / 2, 330);
@@ -406,7 +417,7 @@ function drawLantern(floor, dir) {
   g.fillStyle = dir === 'down' ? '#ffb43c' : 'rgba(255,255,255,.14)';
   g.fillText('▼', w / 2 + 56, h / 2 + 2);
   g.fillStyle = '#ffb43c'; g.font = '300 44px Inter';
-  g.fillText(String(floor), w / 2, h / 2 + 3);
+  g.fillText(floorLabel(floor), w / 2, h / 2 + 3);
   lantTex.needsUpdate = true;
 }
 drawLantern(1, null);
@@ -419,14 +430,14 @@ const signTex = new THREE.CanvasTexture(signCanvas); signTex.colorSpace = THREE.
 signTex.anisotropy = MAX_ANISO;
 KEEP_TEX.add(signTex);
 function drawSign(floor) {
-  const t = FLOOR_GUIDE[floor]; if (!t) return;
+  const t = floorGuide(floor); if (!t) return;
   const g = signCtx, w = 640, h = 200;
   g.fillStyle = '#14161a'; g.fillRect(0, 0, w, h);
   const ac = '#' + new THREE.Color(t.accent).getHexString();
   g.fillStyle = ac; g.fillRect(0, 0, 14, h);
   g.textAlign = 'left'; g.textBaseline = 'middle';
   g.fillStyle = '#f4f5f6'; g.font = '200 96px Inter';
-  g.fillText(`${floor}F`, 44, h / 2 - 8);
+  g.fillText(floorSign(floor), 44, h / 2 - 8);
   g.font = '500 44px "Zen Kaku Gothic New",sans-serif';
   g.fillText(t.jp, 210, h / 2 - 22);
   g.fillStyle = 'rgba(244,245,246,.55)'; g.font = '300 26px Inter';
@@ -679,27 +690,29 @@ function mulberry32(seed) {
 function buildHallProps(floor, fzIn) {
   if (!hallPropsGroup) return;
   clearGroup(hallPropsGroup);
-  const t = FLOOR_GUIDE[floor]; if (!t) return;
+  const t = floorGuide(floor); if (!t) return;
   const fz = fzIn ?? -dims.D / 2;
   buildFloorVoxels(floor, hallPropsGroup, fz, t);
 }
 
 /* 到着階のフロアテーマを乗場に反映 */
 function applyFloorTheme(floor, immediate) {
-  const t = FLOOR_GUIDE[floor];
+  const t = floorGuide(floor);
   const m = cab.userData.hallMats;
   if (!t || !m) return;
   const wallC = new THREE.Color(t.wall), floorC = new THREE.Color(t.floor), lightC = new THREE.Color(t.light);
   const hl = cab.userData.hallLight, hl2 = cab.userData.hallLight2;
   cab.userData.hallInten = t.inten;
-  // 全フロアを開けたフィールド化: 空・太陽を表示し室内シェルを隠す
-  const baseSky = new THREE.Color(fieldSky(floor));
+  // 地上階は開けたフィールド(空・太陽)。地下は空を隠した暗いフィールド(柱の灯りで探索)
+  const basement = isBasement(floor);
+  const baseSky = new THREE.Color(basement ? 0x0a0a0e : fieldSky(floor));
   cab.userData.baseSky = baseSky;
   scene.background = baseSky.clone();
   scene.fog?.color.copy(baseSky);
   cab.userData.roomParts?.forEach(o => o.visible = false);
-  cab.userData.plainsParts?.forEach(o => o.visible = true);
-  applyDayNight(); // 太陽/月/星の位置・明るさを現在時刻に同期
+  cab.userData.plainsParts?.forEach(o => o.visible = !basement); // 地下は空・太陽を隠す
+  if (!basement) applyDayNight(); // 地上のみ太陽/月/星を同期
+  else setVoxelLight(.5);         // 地下はやや暗い一定光
   drawSign(floor);
   buildHallProps(floor);
   // 乗場シェルをフロアに合わせたドット絵テクスチャに切替
@@ -726,6 +739,7 @@ function applyFloorTheme(floor, immediate) {
 const NIGHT_SKY = new THREE.Color(0x070d24);
 const DUSK_TINT = new THREE.Color(0xe8955a);
 function applyDayNight() {
+  if (isBasement(S.curFloor)) { setVoxelLight(.55); return; } // 地下は昼夜なし・一定光
   const info = getDayInfo();
   const base = cab.userData.baseSky || new THREE.Color(0x9ccdf0);
   // 空: 昼のベース色 ↔ 夜の紺。夕暮れ/夜明けは橙をブレンド
@@ -1096,16 +1110,17 @@ function cue(name, ja, en) {
 const hudNum = document.getElementById('hudNum'), hudDir = document.getElementById('hudDir'),
   hudDept = document.getElementById('hudDept'), floorHud = document.getElementById('floorHud');
 function setHud(f, dir) {
-  hudNum.textContent = f;
+  hudNum.textContent = floorLabel(f);
   hudDir.textContent = dir === 'up' ? '▲ UP' : dir === 'down' ? '▼ DOWN' : '';
-  hudDept.textContent = FLOOR_GUIDE[f]?.jp ?? '';
+  hudDept.textContent = floorGuide(f)?.jp ?? '';
   drawLCD(f, dir);
   drawLantern(f, dir);
 }
 function arrivalText(f) {
-  const g = FLOOR_GUIDE[f];
-  const ja = g ? `${f}階、${g.jp}売場でございます` : `${f}階です`;
-  const en = g ? `${ordinalEn(f)} floor. ${g.en}.` : `${ordinalEn(f)} floor`;
+  const g = floorGuide(f);
+  const fname = f >= 1 ? `${f}階` : `地下${1 - f}階`;
+  const ja = g ? `${fname}、${g.jp}でございます` : `${fname}です`;
+  const en = g ? `${g.en}.` : `Floor ${floorLabel(f)}`;
   return [ja, en];
 }
 /* ── 行先キュー式エレベーター (走行中の途中階も登録・停車できる SCAN 方式) ── */
@@ -1256,7 +1271,7 @@ async function enterFloor() {
   syncViewToggles(); updateFloorBtnLabel();
   if (hasPointerLock && !isTouchDevice()) {
     // 一人称探索: 操作説明オーバーレイ → クリックでポインタロック開始
-    document.getElementById('fpTitle').textContent = `${S.curFloor}F ─ ${FLOOR_GUIDE[S.curFloor]?.jp ?? ''}`;
+    document.getElementById('fpTitle').textContent = `${floorSign(S.curFloor)} ─ ${floorGuide(S.curFloor)?.jp ?? ''}`;
     document.getElementById('fpOverlay').style.display = 'flex';
   } else {
     // フォールバック (タッチ端末): 従来のオービット回遊。タップで破壊できる
@@ -1268,18 +1283,19 @@ async function enterFloor() {
   }
 }
 function isTouchDevice() { return matchMedia('(pointer: coarse)').matches; }
-/* 床を掘り抜いて1階下のフィールドへ落下 (探索中) */
+/* 床を掘り抜いて1階下(地下含む)へ落下 (探索中)。降りられたら true */
 let descending = false;
 function descendFloor() {
-  if (descending || S.view !== 'walk' || S.curFloor <= 1) return;
+  if (descending || S.view !== 'walk' || S.curFloor <= MIN_FLOOR) return false;
   descending = true;
   S.curFloor -= 1;
-  applyFloorTheme(S.curFloor, true); // 下の階のフィールドを再構築 (什器・空・地面)
+  applyFloorTheme(S.curFloor, true); // 下の階のフィールド/地下を再構築
   drawSign(S.curFloor); updateFloorBtnLabel();
   dropInTop();                        // 掘った穴の真下・上空から着地
-  toast(`▼ 掘り抜いて ${S.curFloor}F へ降りた`);
+  toast(`▼ 掘り抜いて ${floorLabel(S.curFloor)} へ降りた`);
   navigator.vibrate?.(40);
   setTimeout(() => { descending = false; }, 400);
+  return true;
 }
 async function returnToCab() {
   if (S.view !== 'walk') return;
