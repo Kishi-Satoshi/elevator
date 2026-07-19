@@ -13,8 +13,8 @@ import gsap from 'gsap';
 ===================================================================== */
 
 const CELL = 0.5;
-const GRID_FIELD = { xMin: -16, xMax: 16, zMin: 0, zMax: 28, yMax: 8 };    // 各階の開けたフィールド
-const GRID_PLAINS = { xMin: -30, xMax: 30, zMin: 0, zMax: 46, yMax: 48 };  // 最上階の大草原(空まで積める高い上限)
+const GRID_FIELD = { xMin: -24, xMax: 24, zMin: 0, zMax: 40, yMax: 8 };    // 各階の開けたフィールド (広め)
+const GRID_PLAINS = { xMin: -40, xMax: 40, zMin: 0, zMax: 62, yMax: 48 };  // 最上階の大草原(さらに広く・空まで積める)
 let GRID = GRID_FIELD;
 const PLAINS_FLOOR = 8;
 function isPlains(floor) { return floor === PLAINS_FLOOR; }
@@ -194,6 +194,12 @@ const T = {
     noiseFill(g, ['#' + c.getHexString(), '#' + l.getHexString(), '#' + d.getHexString()], seeded(hex & 0xffff));
   })),
   water: () => tex('water', () => px16(g => noiseFill(g, ['#2f6bd0', '#3576dc', '#2a62c4', '#3e82e6'], seeded(121)))),
+  lava: () => tex('lava', () => px16(g => {
+    noiseFill(g, ['#e2621a', '#f28a24', '#c4441a', '#f6a83a', '#a83214'], seeded(141));
+    const r = seeded(142);
+    for (let i = 0; i < 6; i++) { g.fillStyle = '#ffd868'; g.fillRect((r() * 14) | 0, (r() * 15) | 0, 2 + ((r() * 3) | 0), 1); }
+    for (let i = 0; i < 3; i++) { g.fillStyle = '#701e0a'; g.fillRect((r() * 14) | 0, (r() * 15) | 0, 3, 1); }
+  })),
   logTop: () => tex('logTop', () => px16(g => {
     noiseFill(g, ['#8a6a42', '#7f6039', '#94724a'], seeded(63));
     g.strokeStyle = 'rgba(70,45,20,.8)';
@@ -301,7 +307,7 @@ function rebuildChunk() {
   for (const [k, v] of world) {
     const [cx, cy, cz] = k.split(',').map(Number);
     const type = v.type;
-    const bucket = type === 'glow' ? 'glow' : TRANS_TYPES.has(type) ? 'trans' : 'opaque';
+    const bucket = (type === 'glow' || type === 'lava') ? 'glow' : TRANS_TYPES.has(type) ? 'trans' : 'opaque'; // 溶岩は常時フルブライト(自ら光る)
     const tiles = blockTilesFor(type);
     const center = cellToWorld(cx, cy, cz);
     const fullBright = bucket === 'glow';
@@ -351,7 +357,7 @@ function rebuildChunk() {
 const AVG_COLOR = {
   stone: 0x8a8f94, planks: 0xb08a54, glass: 0xcfe6f2, glow: 0xffd978, log: 0x6b4d2e,
   leaves: 0x3e7a34, brick: 0x9a4032, gold: 0xe8c34a, quartz: 0xf0ede6, grass: 0x5fa04a, shelf: 0xa67f4b,
-  water: 0x3576dc, stonePath: 0x968f86, dirt: 0x6e5034,
+  water: 0x3576dc, stonePath: 0x968f86, dirt: 0x6e5034, lava: 0xe2621a,
 };
 function avgColor(type) {
   if (type.startsWith('wool:')) return parseInt(type.slice(5), 16);
@@ -497,7 +503,8 @@ function generatePlains() {
   // 芝生の地面を一面に
   fill(map, G.xMin, G.xMax, 0, 0, 1, G.zMax, 'grass');
   // なだらかな丘 (数か所を隆起)
-  const hills = [[-16, 12, 5, 2], [14, 20, 6, 3], [-8, 34, 7, 2], [20, 38, 5, 2], [0, 40, 8, 3]];
+  const hills = [[-16, 12, 5, 2], [14, 20, 6, 3], [-8, 34, 7, 2], [20, 38, 5, 2], [0, 40, 8, 3],
+                 [-30, 46, 6, 3], [30, 24, 5, 2], [-32, 20, 5, 2], [26, 52, 7, 3], [0, 56, 5, 2]];
   for (const [hx, hz, r, hh] of hills) {
     for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
       const d = Math.hypot(dx, dz);
@@ -507,11 +514,12 @@ function generatePlains() {
     }
   }
   // 木立
-  const trees = [[-20, 8], [-12, 16], [-22, 26], [10, 10], [18, 14], [24, 28], [-6, 30], [6, 36], [-18, 40], [16, 42], [2, 22]];
+  const trees = [[-20, 8], [-12, 16], [-22, 26], [10, 10], [18, 14], [24, 28], [-6, 30], [6, 36], [-18, 40], [16, 42], [2, 22],
+                 [-34, 14], [34, 12], [-28, 34], [32, 40], [-36, 52], [36, 54], [-10, 52], [12, 56], [24, 58], [-24, 56]];
   for (const [tx, tz] of trees) treePrefab(map, tx, tz, 3 + ((rand() * 3) | 0));
   // 花畑 (ウール)
   const flowers = ['c94a55', 'e8c34a', 'd07ab0', 'f0f0f0'];
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 70; i++) {
     const fx = Math.round((rand() - .5) * (G.xMax * 2 - 4));
     const fz2 = 2 + Math.round(rand() * (G.zMax - 4));
     setBlock(map, fx, 1, fz2, 'wool:' + flowers[(rand() * flowers.length) | 0]);
@@ -529,6 +537,12 @@ function generatePlains() {
   fill(map, 22, 26, 1, 1, 4, 4, 'planks');
   [[22, 4], [26, 4], [22, 8], [26, 8]].forEach(([px, pz]) => { setBlock(map, px, 1, pz, 'log'); setBlock(map, px, 2, pz, 'log'); });
   fill(map, 22, 26, 3, 3, 4, 8, 'planks');
+  // 第二の池 (奥)
+  for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) {
+    if (Math.hypot(dx, dz) > 3) continue;
+    map.delete(key(-26 + dx, 0, 44 + dz));
+    setBlock(map, -26 + dx, 0, 44 + dz, 'water');
+  }
   return map;
 }
 
@@ -547,40 +561,47 @@ export function fieldSky(floor) {
   return FIELD_THEME[floor]?.sky ?? (floor === 8 ? 0x9ccdf0 : 0x8fb4d6);
 }
 
-/* 床を一面に敷き、入口から奥へ小道を通す共通ベース */
-function fieldBase(map, groundType, edgeType) {
+/* 床を一面に敷き、入口から奥へ小道を通す共通ベース (yBase で床の高さを指定可) */
+function fieldBase(map, groundType, edgeType, yBase = 0) {
   const G = GRID_FIELD;
-  fill(map, G.xMin, G.xMax, 0, 0, 1, G.zMax, groundType);
+  fill(map, G.xMin, G.xMax, yBase, yBase, 1, G.zMax, groundType);
   // 外周のふち取り
-  for (let x = G.xMin; x <= G.xMax; x++) { setBlock(map, x, 0, 1, edgeType); setBlock(map, x, 0, G.zMax, edgeType); }
-  for (let z = 1; z <= G.zMax; z++) { setBlock(map, G.xMin, 0, z, edgeType); setBlock(map, G.xMax, 0, z, edgeType); }
+  for (let x = G.xMin; x <= G.xMax; x++) { setBlock(map, x, yBase, 1, edgeType); setBlock(map, x, yBase, G.zMax, edgeType); }
+  for (let z = 1; z <= G.zMax; z++) { setBlock(map, G.xMin, yBase, z, edgeType); setBlock(map, G.xMax, yBase, z, edgeType); }
   // 入口からの目抜き通り
-  for (let z = 1; z <= G.zMax; z++) { setBlock(map, 0, 0, z, 'stonePath'); setBlock(map, -1, 0, z, 'stonePath'); setBlock(map, 1, 0, z, 'stonePath'); }
+  for (let z = 1; z <= G.zMax; z++) { setBlock(map, 0, yBase, z, 'stonePath'); setBlock(map, -1, yBase, z, 'stonePath'); setBlock(map, 1, yBase, z, 'stonePath'); }
 }
 
 /* 地下フロア (床を掘り抜くと降りる。閉じた薄暗い空間) */
 function generateBasement(floor, accentHex) {
   const map = new Map();
   const wool = 'wool:' + accentHex.toString(16).padStart(6, '0');
-  fieldBase(map, 'stone', 'stonePath');           // コンクリート床
+  const G = GRID_FIELD;
+  const deepest = floor === -2;
+  // 最深部(B3)は床下がマグマ溜まり: 石床(y=1)を掘り抜くと溶岩(y=0)が露出し、踏むと熱ダメージ
+  if (deepest) fill(map, G.xMin, G.xMax, 0, 0, 1, G.zMax, 'lava');
+  const yb = deepest ? 1 : 0; // B3 は床が1段高い (下は溶岩)
+  fieldBase(map, 'stone', 'stonePath', yb);
   // 支柱を格子状に (地下らしい柱)
-  for (let gx = -12; gx <= 12; gx += 8) for (let gz = 5; gz <= 25; gz += 10) {
-    for (let y = 0; y <= 4; y++) setBlock(map, gx, y, gz, 'stone');
-    setBlock(map, gx, 3, gz, 'glow'); // 柱の灯り
+  for (let gx = -20; gx <= 20; gx += 8) for (let gz = 5; gz <= 37; gz += 10) {
+    for (let y = yb; y <= yb + 4; y++) setBlock(map, gx, y, gz, 'stone');
+    setBlock(map, gx, yb + 3, gz, 'glow'); // 柱の灯り
   }
   if (floor === 0) {            // B1 デパ地下(食品): 陳列棚とショーケース
-    for (let z = 6; z <= 22; z += 6) { shelfWall(map, -10, z, 5); shelfWall(map, 5, z, 5); }
-    counterPrefab(map, 0, 12, wool); counterPrefab(map, 0, 20, wool);
+    for (let z = 6; z <= 34; z += 6) { shelfWall(map, -12, z, 6); shelfWall(map, 6, z, 6); }
+    counterPrefab(map, 0, 12, wool); counterPrefab(map, 0, 24, wool);
     setBlock(map, -3, 1, 4, 'wool:c8a860'); setBlock(map, 3, 1, 4, 'wool:c94a55');
   } else if (floor === -1) {    // B2 駐車場: 区画線と駐車中の箱(車)
-    for (let x = -13; x <= 13; x += 5) { setBlock(map, x, 0, 6, wool); setBlock(map, x, 0, 16, wool); setBlock(map, x, 0, 24, wool); }
-    [[-9, 9], [-3, 9], [3, 9], [9, 9], [-9, 19], [3, 19], [9, 19]].forEach(([x, z]) => {
+    for (let x = -21; x <= 21; x += 5) { setBlock(map, x, 0, 6, wool); setBlock(map, x, 0, 18, wool); setBlock(map, x, 0, 30, wool); }
+    [[-14, 9], [-8, 9], [3, 9], [9, 9], [15, 9], [-14, 21], [3, 21], [9, 21], [-8, 33], [15, 33]].forEach(([x, z]) => {
       fill(map, x - 1, x + 1, 1, 1, z, z + 1, 'wool:2c2f38'); fill(map, x - 1, x + 1, 2, 2, z, z, 'glass');
     });
-  } else {                      // B3 機械室・倉庫: 金属設備とパイプ
-    fill(map, -6, 6, 1, 2, 22, 24, 'stone'); fill(map, -6, 6, 3, 3, 22, 24, 'gold');
-    [[-9, 7], [9, 7], [-9, 15], [9, 15]].forEach(([x, z]) => { setBlock(map, x, 0, z, 'quartz'); setBlock(map, x, 1, z, 'glow'); });
-    for (let z = 4; z <= 26; z += 2) setBlock(map, -14, 3, z, 'gold'); // 天井パイプ
+  } else {                      // B3 機械室・倉庫 (床は y=1、下は溶岩)
+    fill(map, -6, 6, 2, 3, 30, 32, 'stone'); fill(map, -6, 6, 4, 4, 30, 32, 'gold');
+    [[-12, 8], [12, 8], [-12, 18], [12, 18], [-12, 28], [12, 28]].forEach(([x, z]) => { setBlock(map, x, yb, z, 'quartz'); setBlock(map, x, yb + 1, z, 'glow'); });
+    for (let z = 4; z <= 36; z += 2) setBlock(map, -18, yb + 3, z, 'gold'); // 天井パイプ
+    // 溶岩がのぞく亀裂 (演出: 最初から少しだけ床が抜けている)
+    [[8, 24], [9, 24], [8, 25], [-7, 12], [-8, 12]].forEach(([x, z]) => map.delete(key(x, yb, z)));
   }
   return map;
 }
@@ -654,6 +675,9 @@ function generateFloor(floor, accentHex) {
       [[0, 20]].forEach(([x, z]) => { setBlock(map, x, 0, z, 'gold'); setBlock(map, x, 1, z, 'glow'); });
       break;
   }
+  // 広くなった外周ゾーンに街灯と植栽 (全フロア共通のスケール感)
+  [[-20, 8], [20, 8], [-20, 22], [20, 22], [-20, 34], [20, 34], [-8, 38], [8, 38]].forEach(([x, z]) => lampPrefab(map, x, z));
+  [[-22, 14], [22, 14], [-22, 30], [22, 30], [0, 36]].forEach(([x, z]) => treePrefab(map, x, z, 3));
   return map;
 }
 
@@ -1333,7 +1357,9 @@ function breakBlockCell(cx, cy, cz) {
   markDirty(curFloor);
 }
 function placeBlockCell(cx, cy, cz) {
-  if (!inGrid(cx, cy, cz) || world.has(key(cx, cy, cz))) return false;
+  if (!inGrid(cx, cy, cz)) return false;
+  const existing = world.get(key(cx, cy, cz));
+  if (existing && existing.type !== 'water' && existing.type !== 'lava') return false; // 液体は上書き設置できる(溶岩に橋を架ける)
   // プレイヤーと重なる位置には置けない
   const wp = cellToWorld(cx, cy, cz);
   const cam = ctx.camera.position;
@@ -1389,7 +1415,7 @@ let miningCell = null, miningProgress = 0, holdBreak = false, holdPlace = false,
 function hardness(type) {
   if (!type) return .6;
   if (type.startsWith('wool:')) return .4;
-  return ({ glass: .18, water: .2, leaves: .3, glow: .35, dirt: .4, grass: .45, shelf: .5,
+  return ({ glass: .18, water: .2, lava: .3, leaves: .3, glow: .35, dirt: .4, grass: .45, shelf: .5,
             planks: .55, log: .6, gold: .65, quartz: .7, stone: .8, stonePath: .8, brick: .85 })[type] ?? .6;
 }
 /* ひび割れテクスチャ (5段階・自作) */
@@ -1632,8 +1658,8 @@ export function dropInTop() {
   ctx.camera.position.set(player.pos.x, player.pos.y + EYE, player.pos.z);
 }
 
-/* 衝突: 水平方向はセルAABBと円の押し出し、垂直は地面高さ。水は通り抜けられる */
-function solidAt(cx, cy, cz) { const b = world?.get(key(cx, cy, cz)); return !!b && b.type !== 'water'; }
+/* 衝突: 水平方向はセルAABBと円の押し出し、垂直は地面高さ。水・溶岩は通り抜けられる(沈む) */
+function solidAt(cx, cy, cz) { const b = world?.get(key(cx, cy, cz)); return !!b && b.type !== 'water' && b.type !== 'lava'; }
 function collideAxis(pos, axis) {
   const feetY = Math.floor((pos.y + .1) / CELL);
   const headY = Math.floor((pos.y + 1.4) / CELL);
@@ -1688,9 +1714,13 @@ export function updateVoxel(dt, walkMode, t) {
   if (keys.KeyA || keys.ArrowLeft) move.sub(right);
   const sneak = isSneak();
   const feetCell = worldToCell(new THREE.Vector3(player.pos.x, player.pos.y + .1, player.pos.z));
-  const inWater = typeAt(feetCell.x, feetCell.y, feetCell.z) === 'water';
+  const feetType = typeAt(feetCell.x, feetCell.y, feetCell.z);
+  const inWater = feetType === 'water';
+  const inLava = feetType === 'lava';
+  // 溶岩: 熱で継続ダメージ (無敵時間が刻み間隔になる) + 画面が熱で赤らむ
+  if (inLava) damagePlayer(3, null, '溶岩の熱');
   const sprintNow = sprinting && (keys.KeyW || keys.ArrowUp) && !sneak;
-  const spd = SPEED * (sneak ? .38 : sprintNow ? 1.62 : 1) * (inWater ? .55 : 1);
+  const spd = SPEED * (sneak ? .38 : sprintNow ? 1.62 : 1) * (inWater ? .55 : inLava ? .3 : 1);
   if (move.lengthSq() > 0) move.normalize().multiplyScalar(spd * dt);
 
   const beforeX = player.pos.x, beforeZ = player.pos.z;
@@ -1730,6 +1760,8 @@ export function updateVoxel(dt, walkMode, t) {
   const ground = groundHeightAt(player.pos.x, player.pos.z);
   player.vel.y -= GRAV * dt;
   if ((keys.Space) && player.onGround) { player.vel.y = JUMP; player.onGround = false; }
+  // 溶岩の中では Space で浮上して脱出できる
+  if (inLava && keys.Space) player.vel.y = Math.min(player.vel.y + 40 * dt, 2.0);
   player.pos.y += player.vel.y * dt;
   // 床を掘り抜いて落下 → 1階下(地下含む)へ。最深部は main 側が false を返すのでその場で着地
   if (player.pos.y < -0.8) {
