@@ -500,8 +500,8 @@ function generatePlains() {
   const map = new Map();
   const G = GRID_PLAINS;
   const rand = seeded(20240808);
-  // 芝生の地面を一面に
-  fill(map, G.xMin, G.xMax, 0, 0, 1, G.zMax, 'grass');
+  // 芝生の地面を一面に (戸口の z=0 も含めて敷き、降車直後に落ちないように)
+  fill(map, G.xMin, G.xMax, 0, 0, 0, G.zMax, 'grass');
   // なだらかな丘 (数か所を隆起)
   const hills = [[-16, 12, 5, 2], [14, 20, 6, 3], [-8, 34, 7, 2], [20, 38, 5, 2], [0, 40, 8, 3],
                  [-30, 46, 6, 3], [30, 24, 5, 2], [-32, 20, 5, 2], [26, 52, 7, 3], [0, 56, 5, 2]];
@@ -564,12 +564,13 @@ export function fieldSky(floor) {
 /* 床を一面に敷き、入口から奥へ小道を通す共通ベース (yBase で床の高さを指定可) */
 function fieldBase(map, groundType, edgeType, yBase = 0) {
   const G = GRID_FIELD;
-  fill(map, G.xMin, G.xMax, yBase, yBase, 1, G.zMax, groundType);
+  // 戸口の z=0 も含めて敷く (降車直後に落ちないように)
+  fill(map, G.xMin, G.xMax, yBase, yBase, 0, G.zMax, groundType);
   // 外周のふち取り
-  for (let x = G.xMin; x <= G.xMax; x++) { setBlock(map, x, yBase, 1, edgeType); setBlock(map, x, yBase, G.zMax, edgeType); }
-  for (let z = 1; z <= G.zMax; z++) { setBlock(map, G.xMin, yBase, z, edgeType); setBlock(map, G.xMax, yBase, z, edgeType); }
+  for (let x = G.xMin; x <= G.xMax; x++) { setBlock(map, x, yBase, 0, edgeType); setBlock(map, x, yBase, G.zMax, edgeType); }
+  for (let z = 0; z <= G.zMax; z++) { setBlock(map, G.xMin, yBase, z, edgeType); setBlock(map, G.xMax, yBase, z, edgeType); }
   // 入口からの目抜き通り
-  for (let z = 1; z <= G.zMax; z++) { setBlock(map, 0, yBase, z, 'stonePath'); setBlock(map, -1, yBase, z, 'stonePath'); setBlock(map, 1, yBase, z, 'stonePath'); }
+  for (let z = 0; z <= G.zMax; z++) { setBlock(map, 0, yBase, z, 'stonePath'); setBlock(map, -1, yBase, z, 'stonePath'); setBlock(map, 1, yBase, z, 'stonePath'); }
 }
 
 /* 地下フロア (床を掘り抜くと降りる。閉じた薄暗い空間) */
@@ -579,7 +580,7 @@ function generateBasement(floor, accentHex) {
   const G = GRID_FIELD;
   const deepest = floor === -2;
   // 最深部(B3)は床下がマグマ溜まり: 石床(y=1)を掘り抜くと溶岩(y=0)が露出し、踏むと熱ダメージ
-  if (deepest) fill(map, G.xMin, G.xMax, 0, 0, 1, G.zMax, 'lava');
+  if (deepest) fill(map, G.xMin, G.xMax, 0, 0, 0, G.zMax, 'lava');
   const yb = deepest ? 1 : 0; // B3 は床が1段高い (下は溶岩)
   fieldBase(map, 'stone', 'stonePath', yb);
   // 支柱を格子状に (地下らしい柱)
@@ -1685,7 +1686,8 @@ function groundHeightAt(x, z) {
   for (let y = GRID.yMax; y >= 0; y--) {
     if (solidAt(c.x, y, c.z)) return (y + 1) * CELL;
   }
-  return VOID_Y; // 縦穴 (床まで掘り抜かれている)
+  if (c.z <= 0) return 0; // 戸口の敷居(z≤0)は必ず床。降車直後・帰還時に落ちない
+  return VOID_Y;          // それ以外の縦穴は落下 (下の階へ)
 }
 
 export function updateVoxel(dt, walkMode, t) {
