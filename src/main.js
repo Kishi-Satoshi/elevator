@@ -95,7 +95,7 @@ const MIN_FLOOR = -2;
 const BASEMENT_GUIDE = {
   0:  { jp: '食品・デパ地下', en: 'Food Hall (B1)', wall: 0x2a2620, floor: 0x22201c, light: 0xffdca0, inten: .6, accent: 0xc8a860, arch: 'basement' },
   '-1': { jp: '駐車場', en: 'Parking (B2)', wall: 0x24262a, floor: 0x1c1e22, light: 0xcfe0ff, inten: .5, accent: 0x8890a0, arch: 'basement' },
-  '-2': { jp: '機械室・倉庫', en: 'Machine Room (B3)', wall: 0x1e2024, floor: 0x181a1e, light: 0xa8e0ff, inten: .45, accent: 0x6a7280, arch: 'basement' },
+  '-2': { jp: '機械室・マグマだまり', en: 'Machine Room (B3)', wall: 0x1e2024, floor: 0x181a1e, light: 0xffb070, inten: .45, accent: 0xe2621a, arch: 'basement' },
 };
 function floorGuide(f) { return f >= 1 ? FLOOR_GUIDE[f] : BASEMENT_GUIDE[f]; }
 function floorLabel(f) { return f >= 1 ? String(f) : 'B' + (1 - f); }      // 0→B1, -1→B2, -2→B3
@@ -522,6 +522,18 @@ function buildCab() {
   const back = P(W, H, M.wall); back.position.set(0, H / 2, D / 2); back.rotation.y = Math.PI; cab.add(back);
   const left = P(D, H, M.wall); left.position.set(-W / 2, H / 2, 0); left.rotation.y = Math.PI / 2; cab.add(left);
   const right = P(D, H, M.wall); right.position.set(W / 2, H / 2, 0); right.rotation.y = -Math.PI / 2; cab.add(right);
+  // 実機ディテール: 二段調ウォール — 腰下を濃色パネルにし、境目にステンレスの見切り縁
+  const lowHex = new THREE.Color(wallOpt.hex).multiplyScalar(.42);
+  const lowMat = new THREE.MeshStandardMaterial({ map: steelTex(lowHex.getHex()), color: 0x9a9690, metalness: .35, roughness: .5, envMapIntensity: envOK ? .8 : 0 });
+  const bandH = .92;
+  const lowB = P(W, bandH, lowMat); lowB.position.set(0, bandH / 2, D / 2 - .006); lowB.rotation.y = Math.PI; cab.add(lowB);
+  const lowL = P(D, bandH, lowMat); lowL.position.set(-W / 2 + .006, bandH / 2, 0); lowL.rotation.y = Math.PI / 2; cab.add(lowL);
+  const lowR = P(D, bandH, lowMat); lowR.position.set(W / 2 - .006, bandH / 2, 0); lowR.rotation.y = -Math.PI / 2; cab.add(lowR);
+  const trim = (w2, x, z, ry) => {
+    const t = new THREE.Mesh(new THREE.BoxGeometry(w2, .022, .014), M.sus);
+    t.position.set(x, bandH + .011, z); t.rotation.y = ry; cab.add(t);
+  };
+  trim(W, 0, D / 2 - .012, 0); trim(D, -W / 2 + .012, 0, Math.PI / 2); trim(D, W / 2 - .012, 0, Math.PI / 2);
 
   // 正面（ドア開口）
   const dw = Math.min(.92, W * .62), dh = 2.08;
@@ -542,6 +554,18 @@ function buildCab() {
   doorL.userData.cx = -dw / 4; doorR.userData.cx = dw / 4; doorL.userData.open = -dw / 2 - sideW * .9; doorR.userData.open = dw / 2 + sideW * .9;
   const seal = new THREE.Mesh(new THREE.BoxGeometry(.012, dh, .04), M.dark); seal.position.set(0, dh / 2, fz + .045); cab.add(seal);
   cab.userData.dw = dw; cab.userData.dh = dh;
+  // 実機ディテール: 敷居(シル) — 戸口の床にステンレスの溝つきストリップ
+  const sill = new THREE.Mesh(new THREE.BoxGeometry(dw + .24, .012, .12), M.sus);
+  sill.position.set(0, .006, fz + .05); cab.add(sill);
+  [-.025, 0, .025].forEach(oz => {
+    const groove = new THREE.Mesh(new THREE.BoxGeometry(dw + .2, .002, .006), M.dark);
+    groove.position.set(0, .013, fz + .05 + oz); cab.add(groove);
+  });
+  // 実機ディテール: 扉上インジケーター (かご内側・階数と方向を表示)
+  const doorInd = new THREE.Mesh(new THREE.PlaneGeometry(.34, .128), new THREE.MeshBasicMaterial({ map: lantTex }));
+  doorInd.position.set(0, dh + .12, fz + .014); cab.add(doorInd);
+  // 金属ドアはヘアラインを縦目に (実機の意匠)
+  if (M.door.map) { M.door.map.center.set(.5, .5); M.door.map.rotation = Math.PI / 2; M.door.map.needsUpdate = true; }
 
   // 幅木
   const kick = new THREE.Mesh(new THREE.BoxGeometry(W, .09, .012), M.kickMat); kick.position.set(0, .045, D / 2 - .008); kick.rotation.y = Math.PI; cab.add(kick);
@@ -816,7 +840,17 @@ function buildLights() {
   };
 
   if (c.type === 'flat') {
+    // 実機のフラット天井: 乳白のアクリルパネル + ステンレスの額縁トリム
     emis(W * .72, D * .6, c.color, 2.4);
+    const fw = W * .72 + .05, fd = D * .6 + .05;
+    [[0, fd / 2], [0, -fd / 2]].forEach(([fx, fzz]) => {
+      const t = new THREE.Mesh(new THREE.BoxGeometry(fw + .04, .018, .04), M.sus);
+      t.position.set(fx, H - .016, fzz); lightsGroup.add(t);
+    });
+    [[fw / 2, 0], [-fw / 2, 0]].forEach(([fx, fzz]) => {
+      const t = new THREE.Mesh(new THREE.BoxGeometry(.04, .018, fd + .04), M.sus);
+      t.position.set(fx, H - .016, fzz); lightsGroup.add(t);
+    });
     const l = new THREE.PointLight(c.color, 16, 4.5, 1.6); l.position.set(0, H - .25, 0); lightsGroup.add(l);
     const l2 = new THREE.PointLight(c.color, 7, 4, 1.8); l2.position.set(0, H - .3, -D * .25); lightsGroup.add(l2);
   } else if (c.type === 'down') {
@@ -858,6 +892,9 @@ function buildPanel() {
   // 引き戸の可動面(z≈fz+.0625が最前)より前に薄型パネルを配置し、開でも閉でも
   // 扉に隠れない(表面実装型の操作盤)
   const pz = fz + .085;
+  // 背面ベゼル(ステンレス縁) + フェイスプレート — 実機の薄型ユニット感
+  const bezel = new THREE.Mesh(new THREE.BoxGeometry(.265, 1.75, .014), M.sus);
+  bezel.position.set(panelX, 1.32, pz - .017); panelGroup.add(bezel);
   const plate = new THREE.Mesh(new THREE.BoxGeometry(.24, 1.72, .03), faceMat);
   plate.position.set(panelX, 1.32, pz); panelGroup.add(plate);
 
@@ -937,13 +974,17 @@ function buildOptions() {
   const { W, D } = dims;
   if (S.handrail) {
     const r = .018, y = .86, railMat = M.sus;
+    const cap = (cx, cz) => { // 丸いエンドキャップ (実機の手すり端部)
+      const s = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), railMat);
+      s.position.set(cx, y, cz); optGroup.add(s);
+    };
     const mk = (len, x, z, rotY) => {
       const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 28), railMat);
       m.rotation.z = Math.PI / 2; m.rotation.y = rotY; m.position.set(x, y, z); optGroup.add(m);
     };
-    mk(W * .86, 0, D / 2 - .06, 0);
-    mk(D * .8, -W / 2 + .06, 0, Math.PI / 2);
-    mk(D * .8, W / 2 - .06, 0, Math.PI / 2);
+    mk(W * .86, 0, D / 2 - .06, 0); cap(-W * .43, D / 2 - .06); cap(W * .43, D / 2 - .06);
+    mk(D * .8, -W / 2 + .06, 0, Math.PI / 2); cap(-W / 2 + .06, -D * .4); cap(-W / 2 + .06, D * .4);
+    mk(D * .8, W / 2 - .06, 0, Math.PI / 2); cap(W / 2 - .06, -D * .4); cap(W / 2 - .06, D * .4);
     [[-W * .35, D / 2 - .06], [W * .35, D / 2 - .06], [-W / 2 + .06, -D * .28], [-W / 2 + .06, D * .28], [W / 2 - .06, -D * .28], [W / 2 - .06, D * .28]]
       .forEach(([x, z]) => {
         const b = new THREE.Mesh(new THREE.CylinderGeometry(.008, .008, .05, 16), railMat);
