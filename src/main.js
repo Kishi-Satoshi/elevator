@@ -102,6 +102,11 @@ function floorLabel(f) { return f >= 1 ? String(f) : 'B' + (1 - f); }      // 0�
 function floorSign(f) { return f >= 1 ? `${f}F` : floorLabel(f); }
 function isBasement(f) { return f <= 0; }
 
+/* 非常ボタン / ペット 状態 */
+let emergencyOn = false, emgWasOn = false;
+let emgBuzzer = null;
+let petGroup = null, pets = [];
+
 /* 状態 */
 const S = {
   type: 'P', cap: 9, wall: 'CP132', floor: 'FQ610', ceil: 'CL2L', panel: 'click',
@@ -362,6 +367,26 @@ function btnLabelTex(label, dark) {
       else { tri(w / 2 - 34, h / 2, 'r'); tri(w / 2 + 34, h / 2, 'l'); }
     } else if (label === 'up' || label === 'down') {
       tri(w / 2, h / 2, label === 'up' ? 'u' : 'd', 26);
+    } else if (label === 'emergency') {
+      // 非常ボタン: ベルのマーク (赤系)
+      g.fillStyle = '#d21f2a'; g.strokeStyle = '#d21f2a'; g.lineWidth = 6;
+      const cx = w / 2, cy = h / 2 - 4;
+      g.beginPath();
+      g.moveTo(cx - 22, cy + 18);
+      g.quadraticCurveTo(cx - 22, cy - 22, cx, cy - 26);
+      g.quadraticCurveTo(cx + 22, cy - 22, cx + 22, cy + 18);
+      g.closePath(); g.fill();
+      g.fillRect(cx - 30, cy + 18, 60, 8);                 // ベル下縁
+      g.beginPath(); g.arc(cx, cy - 30, 5, 0, Math.PI * 2); g.fill();      // 取っ手
+      g.beginPath(); g.arc(cx, cy + 34, 7, 0, Math.PI * 2); g.fill();      // 舌
+    } else if (label === 'pet') {
+      // ペットボタン: 肉球のマーク
+      g.fillStyle = dark ? '#ffd0dc' : '#c85a78';
+      const cx = w / 2, cy = h / 2 + 6;
+      g.beginPath(); g.ellipse(cx, cy + 8, 18, 15, 0, 0, Math.PI * 2); g.fill(); // 掌
+      [[-20, -14], [-7, -22], [7, -22], [20, -14]].forEach(([dx, dy]) => {
+        g.beginPath(); g.ellipse(cx + dx, cy + dy, 7, 9, 0, 0, Math.PI * 2); g.fill();
+      });
     } else {
       g.font = '600 68px Inter, sans-serif';
       g.fillText(String(label), w / 2, h / 2 + 2);
@@ -379,6 +404,23 @@ lcdTex.anisotropy = MAX_ANISO;
 KEEP_TEX.add(lcdTex);
 function drawLCD(floor, dir) {
   const g = lcdCtx, w = 256, h = 420;
+  if (emergencyOn) {
+    // 非常時: 赤いインジケーター表示
+    g.fillStyle = '#2a0608'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#e11f2a'; g.fillRect(0, 60, w, 74);
+    g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = '700 34px "Zen Kaku Gothic New",sans-serif';
+    g.fillText('⚠ 非常', w / 2, 97);
+    g.fillStyle = '#ff5560'; g.font = '700 26px "Zen Kaku Gothic New",sans-serif';
+    g.fillText('非常ボタン', w / 2, 210);
+    g.fillText('作動中', w / 2, 250);
+    g.fillStyle = '#ffb0b6'; g.font = '400 15px "Zen Kaku Gothic New",sans-serif';
+    g.fillText('係員が対応しています', w / 2, 320);
+    g.fillText('しばらくお待ちください', w / 2, 344);
+    g.strokeStyle = '#e11f2a'; g.lineWidth = 4; g.strokeRect(8, 8, w - 16, h - 16);
+    lcdTex.needsUpdate = true;
+    return;
+  }
   const grd = g.createLinearGradient(0, 0, 0, h);
   grd.addColorStop(0, '#06121d'); grd.addColorStop(1, '#0a2235');
   g.fillStyle = grd; g.fillRect(0, 0, w, h);
@@ -487,6 +529,12 @@ function wallMaterial(opt) {
 function buildCab() {
   clearGroup(cab);
   btnHits = []; floorBtnMap = {}; mirrorGroup = null; hallPropsGroup = null;
+  petGroup = null; pets = []; // かご再構築でペットはリセット
+  if (emergencyOn) { // 再構築時は非常状態を静かに解除
+    emergencyOn = false; stopBuzzer();
+    document.getElementById('emgBanner')?.style && (document.getElementById('emgBanner').style.display = 'none');
+    document.getElementById('emgVignette')?.style && (document.getElementById('emgVignette').style.display = 'none');
+  }
 
   const s = capScale();
   const W = 1.45 * s, D = 1.5, H = 2.32;
@@ -903,14 +951,14 @@ function buildPanel() {
     new THREE.MeshBasicMaterial({ map: lcdTex }));
   lcd.position.set(panelX, 1.92, pz + .017); panelGroup.add(lcd);
 
-  // 大型ボタン（8フロア + 開/閉） — 円筒軸を Z 方向へ向け、丸ボタンが正面を向く
-  const mkBtn = (y, x, floor, label) => {
+  // 大型ボタン（8フロア + 開/閉 + 非常/ペット） — 円筒軸を Z 方向へ向け、丸ボタンが正面を向く
+  const mkBtn = (y, x, floor, label, opt = {}) => {
     const ring = new THREE.Mesh(new THREE.CylinderGeometry(.036, .036, .006, 28),
-      new THREE.MeshStandardMaterial({ color: p.ring, metalness: .7, roughness: .35 }));
+      new THREE.MeshStandardMaterial({ color: opt.ring ?? p.ring, metalness: .7, roughness: .35 }));
     ring.rotation.x = Math.PI / 2; ring.position.set(x, y, pz + .016); panelGroup.add(ring);
     const mat = new THREE.MeshStandardMaterial({
-      color: p.btn, metalness: S.panel === 'crystal' ? .1 : .6,
-      roughness: S.panel === 'crystal' ? .15 : .4, emissive: p.glow, emissiveIntensity: 0,
+      color: opt.btn ?? p.btn, metalness: S.panel === 'crystal' ? .1 : .6,
+      roughness: S.panel === 'crystal' ? .15 : .4, emissive: opt.glow ?? p.glow, emissiveIntensity: opt.emis ?? 0,
       transparent: S.panel === 'crystal', opacity: S.panel === 'crystal' ? .92 : 1,
     });
     const b = new THREE.Mesh(new THREE.CylinderGeometry(.028, .028, .013, 28), mat);
@@ -939,6 +987,10 @@ function buildPanel() {
     const f = 8 - i; mkBtn(1.68 - r * .12, panelX - .058 + c * .116, f); i++;
   }
   mkBtn(1.14, panelX - .058, null, 'open'); mkBtn(1.14, panelX + .058, null, 'close');
+  // 非常ボタン(赤) + ペットボタン — 開閉の下に配置
+  cab.userData.emgBtn = mkBtn(0.98, panelX - .058, null, 'emergency', { btn: 0xe23b3b, ring: 0xd21f2a, glow: 0xff2a2a, emis: emergencyOn ? 1 : 0 });
+  mkBtn(0.98, panelX + .058, null, 'pet', { btn: 0xf0c8d4, ring: 0xc85a78, glow: 0xff6a9a });
+  syncEmergencyBtn();
   highlightFloorBtn();
 }
 /* 登録済み行先は強く点灯・現在階は淡く点灯 */
@@ -1324,6 +1376,131 @@ async function enterFloor() {
   }
 }
 function isTouchDevice() { return matchMedia('(pointer: coarse)').matches; }
+
+/* ─────────── 非常ボタン (押すと非常アナウンス+赤インジケーター、再度押すと解除) ─────────── */
+function syncEmergencyBtn() {
+  const b = cab.userData.emgBtn;
+  if (b?.material) { b.material.emissive.setHex(0xff2a2a); b.material.emissiveIntensity = emergencyOn ? 1.3 : 0; }
+}
+function toggleEmergency() {
+  emergencyOn = !emergencyOn;
+  const banner = document.getElementById('emgBanner');
+  const vig = document.getElementById('emgVignette');
+  if (emergencyOn) {
+    if (banner) banner.style.display = 'flex';
+    if (vig) vig.style.display = 'block';
+    startBuzzer();
+    speak('ただいま非常ボタンが押されました。係員が確認しております。かご内で、そのまま少々お待ちください。',
+          'The emergency button has been pressed. Staff has been notified. Please remain calm and wait in the car.');
+    toast('⚠ 非常ボタン作動 ─ 係員に通報しました');
+    navigator.vibrate?.([90, 50, 90, 50, 300]);
+  } else {
+    if (banner) banner.style.display = 'none';
+    if (vig) vig.style.display = 'none';
+    stopBuzzer();
+    speechSynthesis?.cancel();
+    if (clipAudio) { try { clipAudio.pause(); } catch {} }
+    speak('非常ボタンを解除しました。ご協力ありがとうございました。', 'Emergency released. Thank you for your cooperation.');
+    toast('非常ボタンを解除しました');
+  }
+  syncEmergencyBtn();
+  drawLCD(S.curFloor, S.moving ? (emergencyOn ? null : null) : null);
+  drawLantern(S.curFloor, null);
+}
+function startBuzzer() {
+  const a = audio(); stopBuzzer();
+  const o = a.createOscillator(); o.type = 'square'; o.frequency.value = 820;
+  const g = a.createGain(); g.gain.value = .03;
+  const lfo = a.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 2.4;
+  const lg = a.createGain(); lg.gain.value = .03;
+  lfo.connect(lg).connect(g.gain);
+  o.connect(g).connect(a.destination);
+  o.start(); lfo.start();
+  emgBuzzer = { o, lfo, g };
+}
+function stopBuzzer() {
+  if (!emgBuzzer) return;
+  const { o, lfo, g } = emgBuzzer; emgBuzzer = null;
+  try { const t = actx.currentTime; g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(0, t); o.stop(t + .05); lfo.stop(t + .05); } catch {}
+}
+
+/* ─────────── ペットボタン (押すとかご内にブロックのペットが出現) ─────────── */
+function makePet(kind, rand) {
+  const g = new THREE.Group();
+  const palette = kind === 'cat' ? [0x3a3a40, 0xb8894e, 0xd8d2c4, 0x2a2a2e] : [0xa9803f, 0x6b4a2c, 0xe8e2d4, 0x4a3628];
+  const furHex = palette[(rand() * palette.length) | 0];
+  const fur = new THREE.MeshLambertMaterial({ color: furHex });
+  const dk = new THREE.MeshLambertMaterial({ color: 0x241d18 });
+  const pink = new THREE.MeshLambertMaterial({ color: 0xc86a72 });
+  const box = (w, h, d, x, y, z, m) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); g.add(b); return b; };
+  box(.18, .16, .34, 0, .2, 0, fur);                                   // 胴
+  [[-.06, .12], [.06, .12], [-.06, -.12], [.06, -.12]].forEach(([x, z]) => box(.05, .16, .05, x, .08, z, fur)); // 脚
+  const head = new THREE.Group(); head.position.set(0, .3, -.2); g.add(head);
+  const hb = new THREE.Mesh(new THREE.BoxGeometry(.18, .17, .16), fur); head.add(hb);
+  if (kind === 'cat') { [[-.06], [.06]].forEach(([x]) => { const e = new THREE.Mesh(new THREE.BoxGeometry(.05, .07, .03), fur); e.position.set(x, .11, .02); head.add(e); }); }
+  else { [[-.08], [.08]].forEach(([x]) => { const e = new THREE.Mesh(new THREE.BoxGeometry(.06, .1, .04), fur); e.position.set(x, .06, .03); head.add(e); }); }
+  [[-.05], [.05]].forEach(([x]) => { const eye = new THREE.Mesh(new THREE.BoxGeometry(.03, .03, .02), dk); eye.position.set(x, .02, -.09); head.add(eye); });
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(.04, .03, .02), pink); nose.position.set(0, -.02, -.09); head.add(nose);
+  const tail = new THREE.Group(); tail.position.set(0, .26, .17); g.add(tail);
+  const tb = new THREE.Mesh(new THREE.BoxGeometry(.04, .04, .16), fur); tb.position.set(0, 0, .08); tail.add(tb);
+  g.scale.setScalar(.85 + rand() * .25);
+  g.userData.shared = false;
+  return { group: g, kind, head, tail, phase: rand() * 6, target: null, wait: rand() * 2, bark: 1 + rand() * 3 };
+}
+function spawnPet() {
+  if (!petGroup) { petGroup = new THREE.Group(); cab.add(petGroup); }
+  if (pets.length >= 5) { toast('ペットはこれ以上増やせません'); return; }
+  const rand = mulberry32((pets.length + 1) * 7919 + S.cap);
+  const kind = rand() > .5 ? 'dog' : 'cat';
+  const pet = makePet(kind, rand);
+  const { W, D } = dims;
+  pet.group.position.set((rand() - .5) * W * .5, 0, (rand() - .5) * D * .4);
+  pet.group.rotation.y = rand() * Math.PI * 2;
+  petGroup.add(pet.group);
+  pets.push(pet);
+  petSound(kind);
+  toast(kind === 'cat' ? '🐈 ネコがかごに入ってきた' : '🐕 イヌがかごに入ってきた');
+}
+function petSound(kind) {
+  const a = audio(), t = a.currentTime;
+  if (kind === 'dog') { // ワン
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(420, t); o.frequency.exponentialRampToValueAtTime(180, t + .14);
+    g.gain.setValueAtTime(.14, t); g.gain.exponentialRampToValueAtTime(.0001, t + .18);
+    o.connect(g).connect(a.destination); o.start(t); o.stop(t + .2);
+  } else { // ニャー
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = 'triangle'; o.frequency.setValueAtTime(620, t); o.frequency.linearRampToValueAtTime(880, t + .12); o.frequency.linearRampToValueAtTime(520, t + .3);
+    g.gain.setValueAtTime(.11, t); g.gain.exponentialRampToValueAtTime(.0001, t + .34);
+    o.connect(g).connect(a.destination); o.start(t); o.stop(t + .36);
+  }
+}
+function updatePets(dt, t) {
+  if (!pets.length) return;
+  const { W, D } = dims;
+  const bx = W / 2 - .18, bz = D / 2 - .2;
+  for (const p of pets) {
+    const pos = p.group.position;
+    if (p.wait > 0) { p.wait -= dt; }
+    else {
+      if (!p.target) { p.target = new THREE.Vector3((Math.random() - .5) * bx * 1.6, 0, (Math.random() - .5) * bz * 1.6); }
+      const dx = p.target.x - pos.x, dz = p.target.z - pos.z, d = Math.hypot(dx, dz);
+      if (d < .06) { p.target = null; p.wait = .6 + Math.random() * 2.5; }
+      else {
+        const sp = .5 * dt; pos.x += (dx / d) * sp; pos.z += (dz / d) * sp;
+        p.group.rotation.y = Math.atan2(-dx, -dz);
+        pos.y = Math.abs(Math.sin(t * 9 + p.phase)) * .03; // トコトコ
+      }
+    }
+    // 尻尾ふり + 頭のゆらぎ
+    p.tail.rotation.y = Math.sin(t * 7 + p.phase) * .5;
+    p.head.rotation.z = Math.sin(t * 2 + p.phase) * .08;
+    // ときどき鳴く
+    p.bark -= dt;
+    if (p.bark <= 0) { p.bark = 6 + Math.random() * 10; if (S.view === 'cab') petSound(p.kind); }
+  }
+}
+
 /* 床を掘り抜いて1階下(地下含む)へ落下 (探索中)。降りられたら true */
 let descending = false;
 function descendFloor() {
@@ -1392,6 +1569,8 @@ renderer.domElement.addEventListener('pointerup', e => {
     if (u.floor) { toast(`${u.floor}F を登録しました`); ride(u.floor); }
     else if (u.label === 'open' && !S.moving) { cue('open', 'ドアが開きます', 'The doors are opening'); doors(true); }
     else if (u.label === 'close' && !S.moving) { cue('close', 'ドアが閉まります。ご注意ください', 'The doors are closing'); doors(false); }
+    else if (u.label === 'emergency') { toggleEmergency(); }
+    else if (u.label === 'pet') { spawnPet(); }
     return;
   }
   // フォールバック回遊中: タップ/クリックでブロック破壊
@@ -1652,6 +1831,7 @@ $('#homeBtn').onclick = () => {
   exitFPMode();
   speechSynthesis?.cancel();
   if (clipAudio) clipAudio.pause();
+  if (emergencyOn) toggleEmergency(); // 非常状態を解除
   S.view = 'cab'; S.doorsOpen = true; rideQueue.clear();
   applyLimits('cab');
   syncViewToggles(); updateFloorBtnLabel();
@@ -1703,6 +1883,16 @@ renderer.setAnimationLoop(() => {
   if (mirrorGroup) mirrorGroup.visible = camera.position.z < dims.D / 2 - 0.02;
   updateVoxel(dt, S.view === 'walk', clock.elapsedTime);
   if (S.view === 'walk' && isFPActive()) applyDayNight();
+  updatePets(dt, clock.elapsedTime);
+  // 非常時: かご内が赤く明滅 + ボタンが点滅
+  if (emergencyOn) {
+    const fl = (Math.sin(clock.elapsedTime * 8) > 0) ? 1 : 0;
+    if (cab.userData.emgBtn?.material) cab.userData.emgBtn.material.emissiveIntensity = fl ? 1.6 : .3;
+    if (lightsGroup) lightsGroup.traverse(o => { if (o.isPointLight) o.color.setRGB(1, fl ? .3 : .55, fl ? .3 : .5); });
+  } else if (emgWasOn && lightsGroup) {
+    lightsGroup.traverse(o => { if (o.isPointLight) { const c = DATA.ceilings.find(x => x.id === S.ceil); o.color.setHex(c ? c.color : 0xffffff); } });
+  }
+  emgWasOn = emergencyOn;
   renderer.render(scene, camera);
 });
 buildCab();
