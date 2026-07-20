@@ -46,8 +46,8 @@ const DATA = {
     { id: 'touchless', n: 'タッチレスボタン', sub: '非接触・有償', btn: 0xd6d9dd, ring: 0x36c6ee, glow: 0x46d3ff },
   ],
   caps: {
-    P: [{ n: 7, kg: 450 }, { n: 9, kg: 600 }, { n: 11, kg: 750 }, { n: 13, kg: 900 }, { n: 15, kg: 1000 }],
-    R: [{ n: 6, kg: 450 }, { n: 9, kg: 600 }, { n: 13, kg: 900 }, { n: 15, kg: 1000 }],
+    P: [{ n: 6, kg: 450 }, { n: 15, kg: 1000 }, { n: 50, kg: 3350 }, { n: 90, kg: 6000 }],
+    R: [{ n: 6, kg: 450 }, { n: 15, kg: 1000 }, { n: 50, kg: 3350 }, { n: 90, kg: 6000 }],
   },
   doors: [
     { id: 'DSUS', n: 'ステンレス ヘアライン', hex: 0xc8cbd0, metal: true, css: 'linear-gradient(180deg,#d8dbdf,#aeb2b8)' },
@@ -109,7 +109,7 @@ let petGroup = null, pets = [];
 
 /* 状態 */
 const S = {
-  type: 'P', cap: 9, wall: 'CP132', floor: 'FQ610', ceil: 'CL2L', panel: 'click',
+  type: 'P', cap: 15, wall: 'CP132', floor: 'FQ610', ceil: 'CL2L', panel: 'click',
   door: 'DSUS', frame: 'SUS', kick: 'BLK', view: 'cab', people: 'none',
   handrail: true, mirror: true, style: 'natural', lang: 'ja',
   curFloor: 1, moving: false, doorsOpen: true, pending: null, started: false,
@@ -162,12 +162,12 @@ controls.rotateSpeed = .55;
 const VIEW_LIMITS = {
   cab: { min: .18, max: 1.15, pMin: .55, pMax: 2.05, pan: false },
   walk: { min: .3, max: 7.5, pMin: .3, pMax: 1.72, pan: true },
-  doll: { min: 1.2, max: 9, pMin: .18, pMax: 1.5, pan: false },
+  doll: { min: 1.2, max: 18, pMin: .12, pMax: 1.62, pan: true },
 };
 function viewPose(mode) {
   const fz = -dims.D / 2;
   if (mode === 'walk') return { pos: [0.4, 1.62, fz - 0.7], tgt: [0, 1.25, fz - 3.4] };
-  if (mode === 'doll') return { pos: [-3.2, 3.2, 3.1], tgt: [0, 1.05, -0.6] };
+  if (mode === 'doll') { const s = Math.max(dims.W, dims.D, 1.6); return { pos: [-2.4 - s * 1.1, 3.6 + s * .5, 3.2 + s * 1.1], tgt: [0, dims.H * .75, dims.D * .25] }; }
   // かご内: 扉(-Z)側を向いて立つ。左後方に構えて右前の操作盤(COP)も画面に収める
   return { pos: [-dims.W * 0.22, 1.52, dims.D / 2 - 0.28], tgt: [dims.W * 0.3, 1.3, fz] };
 }
@@ -195,6 +195,7 @@ function setView(mode) {
   applyLimits(mode);
   if (mode === 'doll' && S.doorsOpen && !S.moving) doors(false, 1.1); // 俯瞰時は戸閉で模型らしく
   if (cab.userData.hallGroup) cab.userData.hallGroup.visible = (mode !== 'doll');
+  if (cab.userData.exteriorGroup) cab.userData.exteriorGroup.visible = (mode === 'doll'); // 俯瞰でロープ・レール等を表示
   syncViewToggles();
   const p = viewPose(mode);
   flyTo(p.pos, p.tgt);
@@ -498,7 +499,14 @@ let floorBtnMap = {};    // floor -> {btn, ring}
 let mirrorGroup = null;  // 後方視点で非表示にする
 let hallPropsGroup = null;
 
-function capScale() { return ({ 6: .96, 7: 1, 9: 1.1, 11: 1.2, 13: 1.3, 15: 1.38 })[S.cap] || 1.1; }
+/* 定員→かご寸法係数 (幅 s / 奥行 d / 天井高 h)。最大90人乗り */
+const CAP_DIM = {
+  6:  { s: .9,  d: 1.0, h: 2.3 },
+  15: { s: 1.42, d: 1.2, h: 2.42 },
+  50: { s: 2.5, d: 1.95, h: 2.62 },
+  90: { s: 3.4, d: 2.7, h: 2.82 },
+};
+function capDim() { return CAP_DIM[S.cap] || CAP_DIM[15]; }
 
 function matFor(opt) {
   if (opt.metal) {
@@ -536,8 +544,8 @@ function buildCab() {
     document.getElementById('emgVignette')?.style && (document.getElementById('emgVignette').style.display = 'none');
   }
 
-  const s = capScale();
-  const W = 1.45 * s, D = 1.5, H = 2.32;
+  const cd = capDim();
+  const W = 1.45 * cd.s, D = 1.5 * cd.d, H = cd.h;
   dims = { W, D, H };
   const wallOpt = DATA.walls.find(w => w.id === S.wall);
   const floorOpt = DATA.floors.find(f => f.id === S.floor);
@@ -584,7 +592,7 @@ function buildCab() {
   trim(W, 0, D / 2 - .012, 0); trim(D, -W / 2 + .012, 0, Math.PI / 2); trim(D, W / 2 - .012, 0, Math.PI / 2);
 
   // 正面（ドア開口）
-  const dw = Math.min(.92, W * .62), dh = 2.08;
+  const dw = Math.max(.92, Math.min(2.2, W * .42)), dh = Math.min(H - .18, 2.08 + (cd.h - 2.3) * .8);
   const sideW = (W - dw) / 2;
   const fz = -D / 2;
   const fr1 = P(sideW, H, M.wall); fr1.position.set(-(dw / 2 + sideW / 2), H / 2, fz); cab.add(fr1);
@@ -627,7 +635,57 @@ function buildCab() {
   buildPanel();
   buildOptions();
   buildPeople();
+  buildExterior();
   applyDoorState(true);
+}
+
+/* かご外の構造 (俯瞰モードでのみ表示): 巻上ロープ・かご枠・ガイドレール・つり合いおもり */
+function buildExterior() {
+  const g = new THREE.Group(); cab.add(g); cab.userData.exteriorGroup = g;
+  const { W, D, H } = dims;
+  const steel = new THREE.MeshStandardMaterial({ color: 0x6a6f76, metalness: .85, roughness: .38 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2a2d31, metalness: .7, roughness: .5 });
+  const rope = new THREE.MeshStandardMaterial({ color: 0x40444a, metalness: .55, roughness: .55 });
+  const chY = H + .14;          // クロスヘッド高さ
+  const top = H + 6.2;          // ロープ上端 (昇降路上方)
+  const bot = -2.2;             // レール下端
+  const box = (w, h, d, x, y, z, m) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); g.add(b); return b; };
+  // かご枠 (四隅の縦柱 + 上下梁)
+  [[-W / 2 - .05, D / 2 + .05], [W / 2 + .05, D / 2 + .05], [-W / 2 - .05, -D / 2 - .05], [W / 2 + .05, -D / 2 - .05]]
+    .forEach(([x, z]) => box(.08, H + .3, .08, x, (H + .3) / 2, z, steel));
+  box(W + .3, .12, .18, 0, chY, 0, steel);            // クロスヘッド梁 (X)
+  box(.18, .12, D + .3, 0, chY, 0, steel);            // クロスヘッド梁 (Z)
+  box(W + .3, .12, .18, 0, -.06, 0, steel);           // 下枠
+  // シーブ (綱車)
+  const sheave = new THREE.Mesh(new THREE.CylinderGeometry(.26, .26, .14, 24), dark);
+  sheave.rotation.z = Math.PI / 2; sheave.position.set(0, chY + .34, 0); g.add(sheave);
+  // 巻上ロープ (かご上→上方へ)
+  for (let i = -2; i <= 2; i++) {
+    const r = new THREE.Mesh(new THREE.CylinderGeometry(.014, .014, top - chY, 6), rope);
+    r.position.set(i * .06, (chY + top) / 2, 0); g.add(r);
+  }
+  // ガイドレール (左右・上下に長い T レール)
+  [-W / 2 - .2, W / 2 + .2].forEach(x => {
+    box(.05, top - bot, .14, x, (top + bot) / 2, 0, steel);
+    box(.14, top - bot, .04, x + (x < 0 ? .035 : -.035), (top + bot) / 2, 0, steel);
+    // レールブラケット
+    for (let y = 0; y < top; y += 1.4) box(.16, .06, .1, x, y, 0, dark);
+  });
+  // つり合いおもり (かご後方 +Z、独立レール + ロープ)
+  const cwZ = D / 2 + .55;
+  box(W * .5, H * .78, .24, 0, H * .35, cwZ, dark);            // おもり本体
+  box(W * .5 + .06, .1, .3, 0, H * .78, cwZ, steel);          // おもり上枠
+  for (let i = -1; i <= 1; i++) {
+    const r = new THREE.Mesh(new THREE.CylinderGeometry(.014, .014, top - H * .78, 6), rope);
+    r.position.set(i * .05, (H * .78 + top) / 2, cwZ); g.add(r);
+  }
+  box(.05, top - bot, .1, 0, (top + bot) / 2, cwZ + .18, steel); // おもりレール
+  box(.05, top - bot, .1, W * .28, (top + bot) / 2, cwZ, steel);
+  box(.05, top - bot, .1, -W * .28, (top + bot) / 2, cwZ, steel);
+  // 緩衝器 (ピット)
+  [-.35, .35].forEach(x => { const buf = new THREE.Mesh(new THREE.CylinderGeometry(.06, .09, .5, 10), dark); buf.position.set(x, bot + .3, 0); g.add(buf); });
+  box(W + .8, .1, D + 1.6, 0, bot, D * .2, dark);              // ピット床
+  g.visible = (S.view === 'doll');
 }
 
 /* ─────────── 乗場フロア（回遊可能な売場空間） ─────────── */
@@ -851,7 +909,9 @@ function buildPeople() {
   peopleGroup = new THREE.Group(); cab.add(peopleGroup);
   if (S.people === 'none') return;
   const { W, D } = dims;
-  const counts = { few: 2, half: Math.max(2, Math.round(S.cap / 2)), seven: Math.max(3, Math.round(S.cap * .7)), full: S.cap };
+  // 大定員(50/90名)は描画数を抑えつつ混雑感を出す (最大40体)
+  const cap = Math.min(S.cap, 40);
+  const counts = { few: 2, half: Math.max(2, Math.round(cap / 2)), seven: Math.max(3, Math.round(cap * .7)), full: cap };
   const rx = W / 2 - .34, rzF = -D / 2 + .44, rzB = D / 2 - .36;
   const rand = mulberry32(S.cap * 131 + (S.people === 'wc' ? 7 : { few: 1, half: 2, seven: 3, full: 4 }[S.people] || 0));
   // 顔がドア(-Z)側を向くよう rotation.y≈0 で配置
@@ -1235,6 +1295,22 @@ function ride(target) {
   highlightFloorBtn(); markFloorBtns();
   if (!riding) driveLoop();
 }
+/* 行先登録の取消 (ダブルクリック) */
+function cancelFloor(f) {
+  if (!rideQueue.has(f)) return;
+  rideQueue.delete(f);
+  highlightFloorBtn(); markFloorBtns();
+  toast(`${floorSign(f)} をキャンセルしました`);
+}
+/* フロアボタン押下: シングルで登録、同じ階をダブルクリックで取消 */
+let lastBtnClick = { floor: null, t: 0 };
+function floorBtnPressed(f) {
+  const now = performance.now();
+  const isDbl = lastBtnClick.floor === f && (now - lastBtnClick.t) < 400;
+  lastBtnClick = { floor: f, t: now };
+  if (isDbl && rideQueue.has(f)) { cancelFloor(f); lastBtnClick.floor = null; return; }
+  toast(`${floorSign(f)} を登録しました`); ride(f);
+}
 
 /* 現在位置・進行方向から次に停まる階を選ぶ (SCAN: 進行方向優先) */
 function pickNextStop() {
@@ -1566,7 +1642,7 @@ renderer.domElement.addEventListener('pointerup', e => {
     btnBeep();
     pressFX(u);
     if (u.hallCall) { hallCall(); return; }
-    if (u.floor) { toast(`${u.floor}F を登録しました`); ride(u.floor); }
+    if (u.floor) { floorBtnPressed(u.floor); }
     else if (u.label === 'open' && !S.moving) { cue('open', 'ドアが開きます', 'The doors are opening'); doors(true); }
     else if (u.label === 'close' && !S.moving) { cue('close', 'ドアが閉まります。ご注意ください', 'The doors are closing'); doors(false); }
     else if (u.label === 'emergency') { toggleEmergency(); }
@@ -1669,7 +1745,8 @@ const fbWrap = $('#floorBtns');
 for (let f = 8; f >= 1; f--) {
   const b = document.createElement('button'); b.className = 'fb';
   b.innerHTML = `${f}<small>${FLOOR_GUIDE[f]?.jp.split('・')[0] ?? ''}</small>`;
-  b.onclick = () => { btnBeep(); toast(`${f}F を登録しました`); ride(f); };
+  b.onclick = () => { btnBeep(); floorBtnPressed(f); };
+  b.title = 'クリックで登録／ダブルクリックで取消';
   b.dataset.f = f; fbWrap.appendChild(b);
 }
 function markFloorBtns() {
