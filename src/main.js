@@ -106,6 +106,7 @@ function isBasement(f) { return f <= 0; }
 let emergencyOn = false, emgWasOn = false;
 let emgBuzzer = null;
 let petGroup = null, pets = [];
+let peopleList = []; // 乗客(非常時のパニック演出用)
 
 /* 状態 */
 const S = {
@@ -856,6 +857,7 @@ let peopleGroup = null;
 function buildPeople() {
   if (peopleGroup) { cab.remove(peopleGroup); disposeObject(peopleGroup); }
   peopleGroup = new THREE.Group(); cab.add(peopleGroup);
+  peopleList = [];
   if (S.people === 'none') return;
   const { W, D } = dims;
   // 大定員(50/90名)は描画数を抑えつつ混雑感を出す (最大40体)
@@ -864,9 +866,10 @@ function buildPeople() {
   const rx = W / 2 - .34, rzF = -D / 2 + .44, rzB = D / 2 - .36;
   const rand = mulberry32(S.cap * 131 + (S.people === 'wc' ? 7 : { few: 1, half: 2, seven: 3, full: 4 }[S.people] || 0));
   // 顔がドア(-Z)側を向くよう rotation.y≈0 で配置
+  const track = (grp) => { grp.userData.bx = grp.position.x; grp.userData.by = grp.rotation.y; grp.userData.phase = rand() * 6.28; peopleList.push(grp); };
   if (S.people === 'wc') {
-    const wc = makeBlockWheelchair(rand); wc.position.set(-W * .16, 0, -.05); wc.rotation.y = .05; peopleGroup.add(wc);
-    const p = makeBlockPerson(rand); p.position.set(W * .26, 0, D * .18); p.rotation.y = -.5; peopleGroup.add(p);
+    const wc = makeBlockWheelchair(rand); wc.position.set(-W * .16, 0, -.05); wc.rotation.y = .05; peopleGroup.add(wc); track(wc);
+    const p = makeBlockPerson(rand); p.position.set(W * .26, 0, D * .18); p.rotation.y = -.5; peopleGroup.add(p); track(p);
     return;
   }
   const n = counts[S.people] || 0;
@@ -878,7 +881,7 @@ function buildPeople() {
     const zz = rzF + fzr * (rzB - rzF) + (rand() - .5) * .08;
     const p = makeBlockPerson(rand); p.position.set(x, 0, zz);
     p.rotation.y = (rand() - .5) * .7; // ほぼドア向き
-    peopleGroup.add(p);
+    peopleGroup.add(p); track(p);
   }
 }
 
@@ -1450,79 +1453,168 @@ function stopBuzzer() {
 }
 
 /* ─────────── ペットボタン (押すとかご内にブロックのペットが出現) ─────────── */
+const PET_KINDS = ['dog', 'cat', 'sheep', 'cow', 'pig', 'rabbit', 'bird'];
+const PET_INFO = {
+  dog:    { jp: 'イヌ',   emoji: '🐕', pal: [0xa9803f, 0x6b4a2c, 0xe8e2d4, 0x4a3628] },
+  cat:    { jp: 'ネコ',   emoji: '🐈', pal: [0x3a3a40, 0xb8894e, 0xd8d2c4, 0x2a2a2e] },
+  sheep:  { jp: 'ヒツジ', emoji: '🐑', pal: [0xf3efe6, 0xe9e2d6, 0xdcd2c2] },
+  cow:    { jp: 'ウシ',   emoji: '🐄', pal: [0xf4f1eb] },
+  pig:    { jp: 'ブタ',   emoji: '🐖', pal: [0xe8a7ab, 0xe09699] },
+  rabbit: { jp: 'ウサギ', emoji: '🐇', pal: [0xece7df, 0x9a8a78, 0x35353b] },
+  bird:   { jp: 'ヒヨコ', emoji: '🐤', pal: [0xf6d945, 0xf0c838] },
+};
 function makePet(kind, rand) {
   const g = new THREE.Group();
-  const palette = kind === 'cat' ? [0x3a3a40, 0xb8894e, 0xd8d2c4, 0x2a2a2e] : [0xa9803f, 0x6b4a2c, 0xe8e2d4, 0x4a3628];
-  const furHex = palette[(rand() * palette.length) | 0];
-  const fur = new THREE.MeshLambertMaterial({ color: furHex });
+  const info = PET_INFO[kind] || PET_INFO.dog;
+  const fur = new THREE.MeshLambertMaterial({ color: info.pal[(rand() * info.pal.length) | 0] });
   const dk = new THREE.MeshLambertMaterial({ color: 0x241d18 });
-  const pink = new THREE.MeshLambertMaterial({ color: 0xc86a72 });
+  const pink = new THREE.MeshLambertMaterial({ color: 0xd98a90 });
+  const white = new THREE.MeshLambertMaterial({ color: 0xf4efe6 });
+  const beak = new THREE.MeshLambertMaterial({ color: 0xe08a2a });
   const box = (w, h, d, x, y, z, m) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); g.add(b); return b; };
-  box(.18, .16, .34, 0, .2, 0, fur);                                   // 胴
-  [[-.06, .12], [.06, .12], [-.06, -.12], [.06, -.12]].forEach(([x, z]) => box(.05, .16, .05, x, .08, z, fur)); // 脚
-  const head = new THREE.Group(); head.position.set(0, .3, -.2); g.add(head);
-  const hb = new THREE.Mesh(new THREE.BoxGeometry(.18, .17, .16), fur); head.add(hb);
-  if (kind === 'cat') { [[-.06], [.06]].forEach(([x]) => { const e = new THREE.Mesh(new THREE.BoxGeometry(.05, .07, .03), fur); e.position.set(x, .11, .02); head.add(e); }); }
-  else { [[-.08], [.08]].forEach(([x]) => { const e = new THREE.Mesh(new THREE.BoxGeometry(.06, .1, .04), fur); e.position.set(x, .06, .03); head.add(e); }); }
-  [[-.05], [.05]].forEach(([x]) => { const eye = new THREE.Mesh(new THREE.BoxGeometry(.03, .03, .02), dk); eye.position.set(x, .02, -.09); head.add(eye); });
-  const nose = new THREE.Mesh(new THREE.BoxGeometry(.04, .03, .02), pink); nose.position.set(0, -.02, -.09); head.add(nose);
-  const tail = new THREE.Group(); tail.position.set(0, .26, .17); g.add(tail);
-  const tb = new THREE.Mesh(new THREE.BoxGeometry(.04, .04, .16), fur); tb.position.set(0, 0, .08); tail.add(tb);
-  g.scale.setScalar(.85 + rand() * .25);
+  const head = new THREE.Group(); g.add(head);
+  const tail = new THREE.Group(); g.add(tail);
+  const addEyes = (hz, y = .02, x = .05) => [[-x], [x]].forEach(([ex]) => { const e = new THREE.Mesh(new THREE.BoxGeometry(.03, .03, .02), dk); e.position.set(ex, y, hz); head.add(e); });
+  let baseScale = 1;
+
+  if (kind === 'sheep') {
+    box(.26, .24, .4, 0, .3, 0, fur);                                  // もこもこの胴
+    box(.2, .18, .12, 0, .34, .18, fur);                              // お尻の毛
+    [[-.08, .12], [.08, .12], [-.08, -.12], [.08, -.12]].forEach(([x, z]) => box(.06, .18, .06, x, .09, z, dk)); // 脚
+    head.position.set(0, .36, -.24);
+    head.add(new THREE.Mesh(new THREE.BoxGeometry(.15, .15, .15), dk));  // 黒い顔
+    [[-.09], [.09]].forEach(([x]) => { const e = new THREE.Mesh(new THREE.BoxGeometry(.04, .06, .03), dk); e.position.set(x, .0, .0); head.add(e); });
+    box(.16, .1, .1, 0, .5, -.16, fur);                              // 前髪のもこもこ
+    addEyes(-.08);
+    tail.position.set(0, .34, .22); tail.add(new THREE.Mesh(new THREE.BoxGeometry(.09, .09, .06), fur));
+  } else if (kind === 'cow') {
+    box(.28, .24, .46, 0, .32, 0, fur);
+    box(.14, .245, .16, -.05, .32, -.05, dk); box(.1, .245, .12, .09, .32, .13, dk); // ぶち模様
+    [[-.09, .16], [.09, .16], [-.09, -.16], [.09, -.16]].forEach(([x, z]) => box(.07, .22, .07, x, .11, z, dk));
+    head.position.set(0, .38, -.28);
+    head.add(new THREE.Mesh(new THREE.BoxGeometry(.17, .16, .16), fur));
+    [[-.09], [.09]].forEach(([x]) => { const h = new THREE.Mesh(new THREE.BoxGeometry(.03, .05, .03), white); h.position.set(x, .11, .02); head.add(h); }); // 角
+    [[-.11], [.11]].forEach(([x]) => { const e = new THREE.Mesh(new THREE.BoxGeometry(.05, .04, .03), fur); e.position.set(x, .04, .03); head.add(e); }); // 耳
+    const mz = new THREE.Mesh(new THREE.BoxGeometry(.11, .08, .03), pink); mz.position.set(0, -.05, -.09); head.add(mz); // 鼻づら
+    addEyes(-.09, .04, .06);
+    tail.position.set(0, .36, .24); const tb = new THREE.Mesh(new THREE.BoxGeometry(.03, .22, .03), dk); tb.position.y = -.09; tail.add(tb);
+    baseScale = 1.15;
+  } else if (kind === 'pig') {
+    box(.24, .2, .36, 0, .26, 0, fur);
+    [[-.07, .12], [.07, .12], [-.07, -.12], [.07, -.12]].forEach(([x, z]) => box(.06, .14, .06, x, .07, z, fur));
+    head.position.set(0, .3, -.22);
+    head.add(new THREE.Mesh(new THREE.BoxGeometry(.16, .15, .14), fur));
+    const sn = new THREE.Mesh(new THREE.BoxGeometry(.08, .07, .04), new THREE.MeshLambertMaterial({ color: 0xcf777e })); sn.position.set(0, -.02, -.09); head.add(sn); // 鼻
+    [[-.07], [.07]].forEach(([x]) => { const e = new THREE.Mesh(new THREE.BoxGeometry(.05, .05, .02), fur); e.position.set(x, .09, -.02); head.add(e); }); // 耳
+    addEyes(-.08, .03, .05);
+    tail.position.set(0, .3, .19); tail.add(new THREE.Mesh(new THREE.BoxGeometry(.03, .07, .03), fur));
+  } else if (kind === 'rabbit') {
+    box(.16, .18, .28, 0, .22, 0, fur);
+    [[-.05, .1], [.05, .1], [-.05, -.1], [.05, -.1]].forEach(([x, z]) => box(.05, .09, .05, x, .045, z, fur));
+    head.position.set(0, .3, -.16);
+    head.add(new THREE.Mesh(new THREE.BoxGeometry(.13, .12, .12), fur));
+    [[-.04], [.04]].forEach(([x]) => { const e = new THREE.Mesh(new THREE.BoxGeometry(.04, .16, .03), fur); e.position.set(x, .13, .02); head.add(e); }); // 長い耳
+    const nz = new THREE.Mesh(new THREE.BoxGeometry(.03, .02, .02), pink); nz.position.set(0, -.02, -.07); head.add(nz);
+    addEyes(-.07, .02, .045);
+    tail.position.set(0, .24, .15); tail.add(new THREE.Mesh(new THREE.BoxGeometry(.08, .08, .06), white)); // ふわふわの尾
+    baseScale = .82;
+  } else if (kind === 'bird') {
+    box(.18, .18, .18, 0, .17, 0, fur);                              // まるいヒヨコ
+    [[-.04], [.04]].forEach(([x]) => box(.03, .05, .06, x, .04, 0, beak)); // 足
+    head.position.set(0, .3, -.05);
+    head.add(new THREE.Mesh(new THREE.BoxGeometry(.13, .12, .12), fur));
+    const bk = new THREE.Mesh(new THREE.BoxGeometry(.04, .03, .04), beak); bk.position.set(0, -.02, -.08); head.add(bk); // くちばし
+    addEyes(-.07, .02, .04);
+    [-1, 1].forEach(s => box(.03, .1, .12, s * .1, .17, 0, fur));    // 羽
+    tail.position.set(0, .2, .1); tail.add(new THREE.Mesh(new THREE.BoxGeometry(.03, .07, .05), fur));
+    baseScale = .8;
+  } else { // dog / cat
+    box(.18, .16, .34, 0, .2, 0, fur);
+    [[-.06, .12], [.06, .12], [-.06, -.12], [.06, -.12]].forEach(([x, z]) => box(.05, .16, .05, x, .08, z, fur));
+    head.position.set(0, .3, -.2);
+    head.add(new THREE.Mesh(new THREE.BoxGeometry(.18, .17, .16), fur));
+    if (kind === 'cat') { [[-.06], [.06]].forEach(([x]) => { const e = new THREE.Mesh(new THREE.BoxGeometry(.05, .07, .03), fur); e.position.set(x, .11, .02); head.add(e); }); }
+    else { [[-.08], [.08]].forEach(([x]) => { const e = new THREE.Mesh(new THREE.BoxGeometry(.06, .1, .04), fur); e.position.set(x, .06, .03); head.add(e); }); }
+    addEyes(-.09);
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(.04, .03, .02), pink); nose.position.set(0, -.02, -.09); head.add(nose);
+    const tb = new THREE.Mesh(new THREE.BoxGeometry(.04, .04, .16), fur); tb.position.set(0, 0, .08); tail.add(tb);
+    tail.position.set(0, .26, .17);
+  }
+  g.scale.setScalar(baseScale * (.85 + rand() * .25));
   g.userData.shared = false;
   return { group: g, kind, head, tail, phase: rand() * 6, target: null, wait: rand() * 2, bark: 1 + rand() * 3 };
 }
 function spawnPet() {
   if (!petGroup) { petGroup = new THREE.Group(); cab.add(petGroup); }
-  if (pets.length >= 5) { toast('ペットはこれ以上増やせません'); return; }
-  const rand = mulberry32((pets.length + 1) * 7919 + S.cap);
-  const kind = rand() > .5 ? 'dog' : 'cat';
-  const pet = makePet(kind, rand);
+  const target = Math.min(S.cap, 40); // 定員と同数(描画は最大40)
+  if (pets.length >= target) { toast('かごはペットでいっぱいです'); return; }
   const { W, D } = dims;
-  pet.group.position.set((rand() - .5) * W * .5, 0, (rand() - .5) * D * .4);
-  pet.group.rotation.y = rand() * Math.PI * 2;
-  petGroup.add(pet.group);
-  pets.push(pet);
-  petSound(kind);
-  toast(kind === 'cat' ? '🐈 ネコがかごに入ってきた' : '🐕 イヌがかごに入ってきた');
+  const start = pets.length;
+  const tally = {};
+  for (let i = start; i < target; i++) {
+    const rand = mulberry32((i + 1) * 7919 + S.cap * 17);
+    const kind = PET_KINDS[(rand() * PET_KINDS.length) | 0];
+    const pet = makePet(kind, rand);
+    pet.group.position.set((rand() - .5) * (W - .5), 0, (rand() - .5) * (D - .55));
+    pet.group.rotation.y = rand() * Math.PI * 2;
+    petGroup.add(pet.group);
+    pets.push(pet);
+    tally[kind] = (tally[kind] || 0) + 1;
+  }
+  if (pets[start]) petSound(pets[start].kind);
+  const summary = Object.keys(tally).map(k => `${PET_INFO[k].emoji}${tally[k]}`).join(' ');
+  toast(`🐾 ペット ${pets.length}匹が乗車 ${summary}`);
 }
 function petSound(kind) {
   const a = audio(), t = a.currentTime;
-  if (kind === 'dog') { // ワン
+  const tone = (type, f0, f1, dur, gain, at = t) => {
     const o = a.createOscillator(), g = a.createGain();
-    o.type = 'sawtooth'; o.frequency.setValueAtTime(420, t); o.frequency.exponentialRampToValueAtTime(180, t + .14);
-    g.gain.setValueAtTime(.14, t); g.gain.exponentialRampToValueAtTime(.0001, t + .18);
-    o.connect(g).connect(a.destination); o.start(t); o.stop(t + .2);
-  } else { // ニャー
-    const o = a.createOscillator(), g = a.createGain();
-    o.type = 'triangle'; o.frequency.setValueAtTime(620, t); o.frequency.linearRampToValueAtTime(880, t + .12); o.frequency.linearRampToValueAtTime(520, t + .3);
-    g.gain.setValueAtTime(.11, t); g.gain.exponentialRampToValueAtTime(.0001, t + .34);
-    o.connect(g).connect(a.destination); o.start(t); o.stop(t + .36);
+    o.type = type; o.frequency.setValueAtTime(f0, at);
+    if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), at + dur * .9);
+    g.gain.setValueAtTime(gain, at); g.gain.exponentialRampToValueAtTime(.0001, at + dur);
+    o.connect(g).connect(a.destination); o.start(at); o.stop(at + dur + .02);
+  };
+  switch (kind) {
+    case 'dog':   tone('sawtooth', 420, 180, .18, .14); break;                                    // ワン
+    case 'cat': { // ニャー
+      const o = a.createOscillator(), g = a.createGain();
+      o.type = 'triangle'; o.frequency.setValueAtTime(620, t); o.frequency.linearRampToValueAtTime(880, t + .12); o.frequency.linearRampToValueAtTime(520, t + .3);
+      g.gain.setValueAtTime(.11, t); g.gain.exponentialRampToValueAtTime(.0001, t + .34);
+      o.connect(g).connect(a.destination); o.start(t); o.stop(t + .36); break;
+    }
+    case 'sheep': tone('sawtooth', 380, 300, .5, .1); tone('sawtooth', 300, 360, .18, .07, t + .28); break; // メェ〜
+    case 'cow':   tone('sine', 150, 120, .7, .16); break;                                          // モ〜
+    case 'pig':   tone('square', 240, 180, .1, .1); tone('square', 220, 160, .1, .1, t + .14); break; // ブヒッ
+    case 'rabbit':tone('triangle', 900, 1100, .07, .05); break;                                    // キュッ(小さく)
+    case 'bird':  tone('sine', 1500, 1900, .08, .07); tone('sine', 1700, 1400, .08, .07, t + .12); break; // ピヨピヨ
+    default:      tone('sawtooth', 420, 180, .18, .12);
   }
 }
 function updatePets(dt, t) {
   if (!pets.length) return;
   const { W, D } = dims;
   const bx = W / 2 - .18, bz = D / 2 - .2;
+  const panic = emergencyOn;
   for (const p of pets) {
     const pos = p.group.position;
-    if (p.wait > 0) { p.wait -= dt; }
+    if (p.wait > 0 && !panic) { p.wait -= dt; }
     else {
-      if (!p.target) { p.target = new THREE.Vector3((Math.random() - .5) * bx * 1.6, 0, (Math.random() - .5) * bz * 1.6); }
+      if (!p.target || (panic && Math.random() < .05)) { p.target = new THREE.Vector3((Math.random() - .5) * bx * 1.7, 0, (Math.random() - .5) * bz * 1.7); }
       const dx = p.target.x - pos.x, dz = p.target.z - pos.z, d = Math.hypot(dx, dz);
-      if (d < .06) { p.target = null; p.wait = .6 + Math.random() * 2.5; }
+      if (d < .06) { p.target = null; p.wait = panic ? 0 : .6 + Math.random() * 2.5; }
       else {
-        const sp = .5 * dt; pos.x += (dx / d) * sp; pos.z += (dz / d) * sp;
-        p.group.rotation.y = Math.atan2(-dx, -dz);
-        pos.y = Math.abs(Math.sin(t * 9 + p.phase)) * .03; // トコトコ
+        const sp = (panic ? 1.6 : .5) * dt; pos.x += (dx / d) * sp; pos.z += (dz / d) * sp;
+        p.group.rotation.y = Math.atan2(-dx, -dz) + (panic ? Math.sin(t * 30 + p.phase) * .25 : 0);
+        pos.y = Math.abs(Math.sin(t * (panic ? 17 : 9) + p.phase)) * (panic ? .07 : .03); // トコトコ / パニック跳ね
       }
     }
-    // 尻尾ふり + 頭のゆらぎ
-    p.tail.rotation.y = Math.sin(t * 7 + p.phase) * .5;
-    p.head.rotation.z = Math.sin(t * 2 + p.phase) * .08;
-    // ときどき鳴く
-    p.bark -= dt;
-    if (p.bark <= 0) { p.bark = 6 + Math.random() * 10; if (S.view === 'cab') petSound(p.kind); }
+    // 尻尾ふり + 頭のゆらぎ (非常時は激しく)
+    p.tail.rotation.y = Math.sin(t * (panic ? 18 : 7) + p.phase) * (panic ? .9 : .5);
+    p.head.rotation.z = Math.sin(t * (panic ? 12 : 2) + p.phase) * (panic ? .22 : .08);
+    if (panic) p.head.rotation.x = Math.sin(t * 15 + p.phase) * .2;
+    // ときどき鳴く (非常時は頻繁に)
+    p.bark -= dt * (panic ? 3.5 : 1);
+    if (p.bark <= 0) { p.bark = (panic ? 1.2 : 6) + Math.random() * (panic ? 2 : 10); if (S.view === 'cab') petSound(p.kind); }
   }
 }
 
@@ -1912,13 +2004,24 @@ renderer.setAnimationLoop(() => {
   updateVoxel(dt, S.view === 'walk', clock.elapsedTime);
   if (S.view === 'walk' && isFPActive()) applyDayNight();
   updatePets(dt, clock.elapsedTime);
-  // 非常時: かご内が赤く明滅 + ボタンが点滅
+  // 非常時: かご内が赤く明滅 + ボタンが点滅 + 乗客がパニック
   if (emergencyOn) {
-    const fl = (Math.sin(clock.elapsedTime * 8) > 0) ? 1 : 0;
+    const et = clock.elapsedTime;
+    const fl = (Math.sin(et * 8) > 0) ? 1 : 0;
     if (cab.userData.emgBtn?.material) cab.userData.emgBtn.material.emissiveIntensity = fl ? 1.6 : .3;
     if (lightsGroup) lightsGroup.traverse(o => { if (o.isPointLight) o.color.setRGB(1, fl ? .3 : .55, fl ? .3 : .5); });
-  } else if (emgWasOn && lightsGroup) {
-    lightsGroup.traverse(o => { if (o.isPointLight) { const c = DATA.ceilings.find(x => x.id === S.ceil); o.color.setHex(c ? c.color : 0xffffff); } });
+    // 乗客がそわそわ・きょろきょろ・足踏み
+    for (const q of peopleList) {
+      const ph = q.userData.phase || 0;
+      q.position.x = q.userData.bx + Math.sin(et * 22 + ph) * .03;
+      q.position.y = Math.abs(Math.sin(et * 11 + ph)) * .045;
+      q.rotation.y = q.userData.by + Math.sin(et * 5 + ph) * .55;
+    }
+  } else {
+    if (emgWasOn && lightsGroup) {
+      lightsGroup.traverse(o => { if (o.isPointLight) { const c = DATA.ceilings.find(x => x.id === S.ceil); o.color.setHex(c ? c.color : 0xffffff); } });
+    }
+    if (emgWasOn) for (const q of peopleList) { q.position.x = q.userData.bx; q.position.y = 0; q.rotation.y = q.userData.by; }
   }
   emgWasOn = emergencyOn;
   renderer.render(scene, camera);
