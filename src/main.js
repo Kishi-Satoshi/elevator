@@ -162,12 +162,12 @@ controls.rotateSpeed = .55;
 const VIEW_LIMITS = {
   cab: { min: .18, max: 1.15, pMin: .55, pMax: 2.05, pan: false },
   walk: { min: .3, max: 7.5, pMin: .3, pMax: 1.72, pan: true },
-  doll: { min: 1.2, max: 18, pMin: .12, pMax: 1.62, pan: true },
+  doll: { min: 1.2, max: 14, pMin: .18, pMax: 1.5, pan: false },
 };
 function viewPose(mode) {
   const fz = -dims.D / 2;
   if (mode === 'walk') return { pos: [0.4, 1.62, fz - 0.7], tgt: [0, 1.25, fz - 3.4] };
-  if (mode === 'doll') { const s = Math.max(dims.W, dims.D, 1.6); return { pos: [-2.4 - s * 1.1, 3.6 + s * .5, 3.2 + s * 1.1], tgt: [0, dims.H * .75, dims.D * .25] }; }
+  if (mode === 'doll') { const s = Math.max(dims.W, dims.D, 1.5) / 1.5; return { pos: [-3.2 * s, 3.2 * s, 3.1 * s], tgt: [0, 1.05 * s, -0.6] }; }
   // かご内: 扉(-Z)側を向いて立つ。左後方に構えて右前の操作盤(COP)も画面に収める
   return { pos: [-dims.W * 0.22, 1.52, dims.D / 2 - 0.28], tgt: [dims.W * 0.3, 1.3, fz] };
 }
@@ -195,7 +195,6 @@ function setView(mode) {
   applyLimits(mode);
   if (mode === 'doll' && S.doorsOpen && !S.moving) doors(false, 1.1); // 俯瞰時は戸閉で模型らしく
   if (cab.userData.hallGroup) cab.userData.hallGroup.visible = (mode !== 'doll');
-  if (cab.userData.exteriorGroup) cab.userData.exteriorGroup.visible = (mode === 'doll'); // 俯瞰でロープ・レール等を表示
   syncViewToggles();
   const p = viewPose(mode);
   flyTo(p.pos, p.tgt);
@@ -635,57 +634,7 @@ function buildCab() {
   buildPanel();
   buildOptions();
   buildPeople();
-  buildExterior();
   applyDoorState(true);
-}
-
-/* かご外の構造 (俯瞰モードでのみ表示): 巻上ロープ・かご枠・ガイドレール・つり合いおもり */
-function buildExterior() {
-  const g = new THREE.Group(); cab.add(g); cab.userData.exteriorGroup = g;
-  const { W, D, H } = dims;
-  const steel = new THREE.MeshStandardMaterial({ color: 0x6a6f76, metalness: .85, roughness: .38 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x2a2d31, metalness: .7, roughness: .5 });
-  const rope = new THREE.MeshStandardMaterial({ color: 0x40444a, metalness: .55, roughness: .55 });
-  const chY = H + .14;          // クロスヘッド高さ
-  const top = H + 6.2;          // ロープ上端 (昇降路上方)
-  const bot = -2.2;             // レール下端
-  const box = (w, h, d, x, y, z, m) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); g.add(b); return b; };
-  // かご枠 (四隅の縦柱 + 上下梁)
-  [[-W / 2 - .05, D / 2 + .05], [W / 2 + .05, D / 2 + .05], [-W / 2 - .05, -D / 2 - .05], [W / 2 + .05, -D / 2 - .05]]
-    .forEach(([x, z]) => box(.08, H + .3, .08, x, (H + .3) / 2, z, steel));
-  box(W + .3, .12, .18, 0, chY, 0, steel);            // クロスヘッド梁 (X)
-  box(.18, .12, D + .3, 0, chY, 0, steel);            // クロスヘッド梁 (Z)
-  box(W + .3, .12, .18, 0, -.06, 0, steel);           // 下枠
-  // シーブ (綱車)
-  const sheave = new THREE.Mesh(new THREE.CylinderGeometry(.26, .26, .14, 24), dark);
-  sheave.rotation.z = Math.PI / 2; sheave.position.set(0, chY + .34, 0); g.add(sheave);
-  // 巻上ロープ (かご上→上方へ)
-  for (let i = -2; i <= 2; i++) {
-    const r = new THREE.Mesh(new THREE.CylinderGeometry(.014, .014, top - chY, 6), rope);
-    r.position.set(i * .06, (chY + top) / 2, 0); g.add(r);
-  }
-  // ガイドレール (左右・上下に長い T レール)
-  [-W / 2 - .2, W / 2 + .2].forEach(x => {
-    box(.05, top - bot, .14, x, (top + bot) / 2, 0, steel);
-    box(.14, top - bot, .04, x + (x < 0 ? .035 : -.035), (top + bot) / 2, 0, steel);
-    // レールブラケット
-    for (let y = 0; y < top; y += 1.4) box(.16, .06, .1, x, y, 0, dark);
-  });
-  // つり合いおもり (かご後方 +Z、独立レール + ロープ)
-  const cwZ = D / 2 + .55;
-  box(W * .5, H * .78, .24, 0, H * .35, cwZ, dark);            // おもり本体
-  box(W * .5 + .06, .1, .3, 0, H * .78, cwZ, steel);          // おもり上枠
-  for (let i = -1; i <= 1; i++) {
-    const r = new THREE.Mesh(new THREE.CylinderGeometry(.014, .014, top - H * .78, 6), rope);
-    r.position.set(i * .05, (H * .78 + top) / 2, cwZ); g.add(r);
-  }
-  box(.05, top - bot, .1, 0, (top + bot) / 2, cwZ + .18, steel); // おもりレール
-  box(.05, top - bot, .1, W * .28, (top + bot) / 2, cwZ, steel);
-  box(.05, top - bot, .1, -W * .28, (top + bot) / 2, cwZ, steel);
-  // 緩衝器 (ピット)
-  [-.35, .35].forEach(x => { const buf = new THREE.Mesh(new THREE.CylinderGeometry(.06, .09, .5, 10), dark); buf.position.set(x, bot + .3, 0); g.add(buf); });
-  box(W + .8, .1, D + 1.6, 0, bot, D * .2, dark);              // ピット床
-  g.visible = (S.view === 'doll');
 }
 
 /* ─────────── 乗場フロア（回遊可能な売場空間） ─────────── */
@@ -1585,6 +1534,8 @@ function descendFloor() {
   S.curFloor -= 1;
   applyFloorTheme(S.curFloor, true); // 下の階のフィールド/地下を再構築
   drawSign(S.curFloor); updateFloorBtnLabel();
+  setHud(S.curFloor, null);          // 左下の現在階表示を更新 (落下後は新しい階へ)
+  const ft = document.getElementById('fpTitle'); if (ft) ft.textContent = `${floorSign(S.curFloor)} ─ ${floorGuide(S.curFloor)?.jp ?? ''}`;
   dropInTop();                        // 掘った穴の真下・上空から着地
   toast(`▼ 掘り抜いて ${floorLabel(S.curFloor)} へ降りた`);
   navigator.vibrate?.(40);
