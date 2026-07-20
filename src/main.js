@@ -1546,24 +1546,19 @@ function makePet(kind, rand) {
 }
 function spawnPet() {
   if (!petGroup) { petGroup = new THREE.Group(); cab.add(petGroup); }
-  const target = Math.min(S.cap, 40); // 定員と同数(描画は最大40)
-  if (pets.length >= target) { toast('かごはペットでいっぱいです'); return; }
+  const limit = Math.min(S.cap, 40); // 定員を上限に(描画は最大40)
+  if (pets.length >= limit) { toast('かごはペットでいっぱいです'); return; }
   const { W, D } = dims;
-  const start = pets.length;
-  const tally = {};
-  for (let i = start; i < target; i++) {
-    const rand = mulberry32((i + 1) * 7919 + S.cap * 17);
-    const kind = PET_KINDS[(rand() * PET_KINDS.length) | 0];
-    const pet = makePet(kind, rand);
-    pet.group.position.set((rand() - .5) * (W - .5), 0, (rand() - .5) * (D - .55));
-    pet.group.rotation.y = rand() * Math.PI * 2;
-    petGroup.add(pet.group);
-    pets.push(pet);
-    tally[kind] = (tally[kind] || 0) + 1;
-  }
-  if (pets[start]) petSound(pets[start].kind);
-  const summary = Object.keys(tally).map(k => `${PET_INFO[k].emoji}${tally[k]}`).join(' ');
-  toast(`🐾 ペット ${pets.length}匹が乗車 ${summary}`);
+  // 押すたびに1匹ずつ・種類はランダム
+  const rand = mulberry32((pets.length + 1) * 7919 + S.cap * 17);
+  const kind = PET_KINDS[(rand() * PET_KINDS.length) | 0];
+  const pet = makePet(kind, rand);
+  pet.group.position.set((rand() - .5) * (W - .5), 0, (rand() - .5) * (D - .55));
+  pet.group.rotation.y = rand() * Math.PI * 2;
+  petGroup.add(pet.group);
+  pets.push(pet);
+  petSound(kind);
+  toast(`${PET_INFO[kind].emoji} ${PET_INFO[kind].jp}がかごに入ってきた（${pets.length}匹）`);
 }
 function petSound(kind) {
   const a = audio(), t = a.currentTime;
